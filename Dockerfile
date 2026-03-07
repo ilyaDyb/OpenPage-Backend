@@ -16,6 +16,9 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV DJANGO_SETTINGS_MODULE=core.open_page.settings
 
+RUN chmod +x /app/entrypoint.sh
+
 EXPOSE 8000
 
-CMD python manage.py runserver 0.0.0.0:8000
+# Использование entrypoint скрипта
+ENTRYPOINT ["/app/entrypoint.sh"]
