@@ -31,14 +31,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    environment:
-      - DEBUG=True
-      - DB_NAME=openpage
-      - DB_USER=postgres
-      - DB_PASSWORD=postgres
-      - DB_HOST=db
-      - DB_PORT=5432
-      - DJANGO_SETTINGS_MODULE=core.open_page.settings
+    env_file:
+      - .env
+      
     command: python manage.py runserver 0.0.0.0:8000
     restart: unless-stopped
 

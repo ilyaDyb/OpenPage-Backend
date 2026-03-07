@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from datetime import timedelta
 
+from corsheaders.defaults import default_headers
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -55,6 +57,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+    'core.auth_.middleware.SecretKeyMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -93,6 +96,9 @@ if os.environ.get('USE_REDIS') == 'True':
     }
 WSGI_APPLICATION = 'core.open_page.wsgi.application'
 
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'x-secret-key',
+]
 
 # Database
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
@@ -189,12 +195,26 @@ SIMPLE_JWT = {
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'OpenPage API',
-    'DESCRIPTION': 'OpenPage API Documentation',
+    'DESCRIPTION': 'API Documentation',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
-    # 'SWAGGER_UI_DIST': 'SIDECAR',
-    # 'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',
-    # 'REDOC_DIST': 'SIDECAR',
+    'SECURITY': [{'ApiKeyAuth': []}],
+    'SECURITY_DEFINITIONS': {
+        'ApiKeyAuth': {
+            'type': 'apiKey',
+            'in': 'header',
+            'name': 'X-Secret-Key',
+        },
+
+        'jwtAuth': {
+            'type': 'http',
+            'scheme': 'bearer',
+            'bearerFormat': 'JWT',
+        }
+    },
+    'SWAGGER_UI_SETTINGS': {
+        'persistAuthorization': True,
+    },
 }
 
 # Internationalization
