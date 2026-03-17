@@ -15,8 +15,8 @@ from rest_framework import generics, status, permissions
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
 from drf_spectacular.types import OpenApiTypes
 
-from core.auth_.validators import validate_user_login_data
-from core.auth_.serializers import MyTokenObtainPairSerializer, UserCreateSerializer, UserSerializer
+from core.auth_.serializers import MyTokenObtainPairSerializer, UserCreateSerializer, UserSerializer, EmailVerifySerializer
+from core.auth_.utils import generate_verification_code, send_verification_email, store_registration_data, get_registration_data, delete_registration_data
 
 User = get_user_model()
 
@@ -43,8 +43,31 @@ class RegisterView(generics.CreateAPIView):
     def post(self, request):
         serializer = UserCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        data = serializer.validated_data
+        email = data['email']
+
+        if get_registration_data(email):
+            return Response(
+                {"detail": "Registration already in progress. Check your email for the code."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        code = generate_verification_code()
+        user_data = {
+            'username': data['username'],
+            'email': email,
+            'password': data['password'],
+            'first_name': data.get('first_name', ''),
+            'last_name': data.get('last_name', ''),
+        }
+        store_registration_data(email, user_data, code)
+
+        send_verification_email(email, code)
+
+        return Response(
+            {"detail": "Verification code sent to email."},
+            status=status.HTTP_200_OK
+        )
 
 
 class LoginView(APIView):
@@ -67,67 +90,73 @@ class LoginView(APIView):
         }
     )
     def post(self, request):
-        username_or_email = request.data.get("username_or_email")
-        password = request.data.get("password")
+            username_or_email = request.data.get("username_or_email")
+            password = request.data.get("password")
 
-        try:
-            user = validate_user_login_data(username_or_email, password)
-        except AuthenticationFailed as e:
-            return Response({"detail": str(e)}, status=e.status_code if hasattr(e, 'status_code') else 400)
+            user = authenticate(username=username_or_email, password=password)
+            if not user:
+                try:
+                    user_obj = User.objects.get(email=username_or_email)
+                    user = authenticate(username=user_obj.username, password=password)
+                except User.DoesNotExist:
+                    pass
+
+            if not user:
+                raise AuthenticationFailed("Invalid credentials")
+
+
+            if not user.email_confirmed:
+                return Response(
+                    {"detail": "Email not confirmed."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                "refresh": str(refresh),
+                "access": str(refresh.access_token),
+            })
+
+class VerifyEmailView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    @extend_schema(
+        request=EmailVerifySerializer,
+        responses={201: OpenApiTypes.OBJECT, 400: OpenApiTypes.OBJECT}
+    )
+    def post(self, request):
+        serializer = EmailVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+        code = serializer.validated_data['code']
+
+        data = get_registration_data(email)
+        if not data:
+            return Response(
+                {"detail": "Registration data not found or expired."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if data.get('code') != code:
+            return Response(
+                {"detail": "Invalid code."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user = User.objects.create_user(
+            username=data['username'],
+            email=data['email'],
+            password=data['password'],
+            first_name=data.get('first_name', ''),
+            last_name=data.get('last_name', ''),
+            email_confirmed=True
+        )
+
+        delete_registration_data(email)
 
         refresh = RefreshToken.for_user(user)
         return Response({
-            "refresh": str(refresh),
-            "access": str(refresh.access_token),
-        })
-
-
-
-# class LogoutView(APIView):
-#     permission_classes = [permissions.IsAuthenticated]
-
-#     @extend_schema(
-#         parameters=[
-#             OpenApiParameter(
-#                 name="Authorization",
-#                 type=str,
-#                 location=OpenApiParameter.HEADER,
-#                 description="Bearer <access_token> (обязателен для аутентификации)",
-#                 required=True,
-#                 examples=[
-#                     OpenApiExample(
-#                         'Пример Bearer токена',
-#                         summary='Пример',
-#                         value='Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...'
-#                     )
-#                 ],
-#             )
-#         ],
-#         request={
-#             'application/json': {
-#                 'type': 'object',
-#                 'properties': {
-#                     'refresh': {'type': 'string', 'example': 'refresh_token_string'},
-#                 },
-#                 'required': ['refresh']
-#             }
-#         },
-#         responses={
-#             205: OpenApiTypes.OBJECT,
-#             400: OpenApiTypes.OBJECT,
-#         }
-#     )
-#     def post(self, request):
-#         refresh_token = request.data.get("refresh")
-#         if not refresh_token:
-#             return Response({"detail": "Refresh token is required"}, status=400)
-
-#         try:
-#             token = RefreshToken(refresh_token)
-#             if str(token.payload.get('user_id')) != str(request.user.id):
-#                 return Response({"detail": "Token does not belong to you"}, status=400)
-
-#             token.blacklist()
-#             return Response({"detail": "You have successfully logged out"}, status=205)
-#         except Exception as e:
-#             return Response({"detail": str(e)}, status=400)
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+            'user': UserSerializer(user).data
+        }, status=status.HTTP_201_CREATED)

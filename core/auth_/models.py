@@ -7,7 +7,16 @@ class User(AbstractUser):
         verbose_name='Статус автора',
         help_text='Отметьте, если пользователь может публиковать книги'
     )
-    # Можно добавить общие поля (например, телефон), если понадобятся
+    
+    email_confirmed = models.BooleanField(
+        default=False,
+        verbose_name='Подтвержденный email',
+    )
+
+    telegram_confirmed = models.BooleanField(
+        default=False,
+        verbose_name='Подтвержденный Telegram',
+    )
 
     class Meta:
         verbose_name = 'Пользователь'

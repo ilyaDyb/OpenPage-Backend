@@ -1,4 +1,7 @@
+import re
 from django.contrib.auth import get_user_model
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError
 
 from core.utils import exception_handler
 
@@ -24,3 +27,10 @@ def validate_user_login_data(username_or_email: str, password: str):
         raise AuthenticationFailed("Incorrect password", code=400)
 
     return user
+
+def is_valid_email_format(email):
+    try:
+        validate_email(email)
+        return True
+    except ValidationError:
+        return False

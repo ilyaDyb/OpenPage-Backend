@@ -2,6 +2,9 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+
+from core.auth_.validators import is_valid_email_format
 
 User = get_user_model()
 
@@ -16,7 +19,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
     password = serializers.CharField(
         write_only=True,
         required=True,
-        style={'input_type': 'password'}
+        style={'input_type': 'password'},
+        validators=[validate_password]
     )
     password2 = serializers.CharField(
         write_only=True,
@@ -32,12 +36,19 @@ class UserCreateSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if attrs['password'] != attrs['password2']:
             raise serializers.ValidationError({"password": "Password fields didn't match."})
+        if User.objects.filter(email=attrs['email']).exists():
+            raise serializers.ValidationError({"email": "User with this email already exists."})
+        if not is_valid_email_format(attrs['email']):
+            raise serializers.ValidationError({"email": "Email format is invalid"})
+
         return attrs
 
-    def create(self, validated_data):
-        validated_data.pop('password2')
-        user = User.objects.create_user(**validated_data)
-        return user
+    def save(self, **kwargs):
+        pass
+
+class EmailVerifySerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    code = serializers.CharField(max_length=6)
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
