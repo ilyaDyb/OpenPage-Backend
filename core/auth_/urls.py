@@ -13,4 +13,11 @@ urlpatterns = [
     path('token/', views.LoginView.as_view(), name='login'),
     path('token/refresh/', TokenRefreshView.as_view(), name='logout'),
 
+    # QR Authentication endpoints
+    path('qr-auth/create/', views.QRAuthCreateView.as_view(), name='qr-auth-create'),
+    path('qr-auth/status/', views.QRAuthStatusView.as_view(), name='qr-auth-status'),
+    path('qr-auth/confirm/', views.QRAuthConfirmView.as_view(), name='qr-auth-confirm'),
+    path('qr-auth/confirmed/', views.QRAuthConfirmedView.as_view(), name='qr-auth-confirmed'),
+    path('qr-auth/cancel/', views.QRAuthCancelView.as_view(), name='qr-auth-cancel'),
+
 ]

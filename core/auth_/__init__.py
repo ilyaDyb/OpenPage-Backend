@@ -1,1 +1,1 @@
-default_app_config = 'auth_.apps.AuthConfig'
+default_app_config = 'core.auth_.apps.AuthConfig'
