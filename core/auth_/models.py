@@ -9,29 +9,21 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 class User(AbstractUser):
-    is_author = models.BooleanField(
-        default=False,
-        verbose_name='Статус автора',
-        help_text='Отметьте, если пользователь может публиковать книги'
-    )
+    """Модель пользователя с ролями"""
     
-    email_confirmed = models.BooleanField(
-        default=False,
-        verbose_name='Подтвержденный email',
-    )
-
-    telegram_confirmed = models.BooleanField(
-        default=False,
-        verbose_name='Подтвержденный Telegram',
-    )
-
-    telegram_id = models.BigIntegerField(
-        null=True,
-        blank=True,
-        unique=True,
-        verbose_name='Telegram ID',
-        help_text='Telegram user ID for QR login'
-    )
+    ROLE_CHOICES = [
+        ('reader', 'Читатель'),
+        ('author', 'Автор'),
+        ('moderator', 'Модератор'),
+        ('admin', 'Администратор'),
+        ('finance_manager', 'Финансовый менеджер'),
+    ]
+    
+    is_author = models.BooleanField(default=False, verbose_name='Статус автора', help_text='Отметьте, если пользователь может публиковать книги')
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='reader', verbose_name='Роль')
+    email_confirmed = models.BooleanField(default=False, verbose_name='Подтвержденный email')
+    telegram_confirmed = models.BooleanField(default=False, verbose_name='Подтвержденный Telegram')
+    telegram_id = models.BigIntegerField(null=True, blank=True, unique=True, verbose_name='Telegram ID', help_text='Telegram user ID for QR login')
 
     class Meta:
         verbose_name = 'Пользователь'
@@ -42,10 +34,7 @@ class User(AbstractUser):
 
 
 class QRAuthRequest(models.Model):
-    """
-    Model for storing QR authentication requests.
-    Used for the QR code login flow.
-    """
+    """Model for storing QR authentication requests"""
     
     STATUS_CHOICES = [
         ('pending', 'Pending'),
@@ -55,63 +44,15 @@ class QRAuthRequest(models.Model):
         ('cancelled', 'Cancelled'),
     ]
     
-    token = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
-        help_text='Unique token for QR authentication'
-    )
-    
-    status = models.CharField(
-        max_length=20,
-        choices=STATUS_CHOICES,
-        default='pending',
-        db_index=True
-    )
-    
-    telegram_id = models.BigIntegerField(
-        null=True,
-        blank=True,
-        help_text='Telegram user ID who scanned the QR code'
-    )
-    
-    telegram_username = models.CharField(
-        max_length=255,
-        null=True,
-        blank=True,
-        help_text='Telegram username'
-    )
-    
-    user = models.ForeignKey(
-        User,
-        on_delete=models.CASCADE,
-        null=True,
-        blank=True,
-        related_name='qr_auth_requests',
-        help_text='Linked user account (after confirmation)'
-    )
-    
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        help_text='Time when QR auth request was created'
-    )
-    
-    expires_at = models.DateTimeField(
-        help_text='Time when QR auth request expires'
-    )
-    
-    confirmed_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text='Time when login was confirmed'
-    )
-    
-    qr_code_image = models.ImageField(
-        upload_to='qr_codes/',
-        null=True,
-        blank=True,
-        help_text='Generated QR code image'
-    )
+    token = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, help_text='Unique token for QR authentication')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', db_index=True)
+    telegram_id = models.BigIntegerField(null=True, blank=True, help_text='Telegram user ID who scanned the QR code')
+    telegram_username = models.CharField(max_length=255, null=True, blank=True, help_text='Telegram username')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True, related_name='qr_auth_requests', help_text='Linked user account (after confirmation)')
+    created_at = models.DateTimeField(auto_now_add=True, help_text='Time when QR auth request was created')
+    expires_at = models.DateTimeField(help_text='Time when QR auth request expires')
+    confirmed_at = models.DateTimeField(null=True, blank=True, help_text='Time when login was confirmed')
+    qr_code_image = models.ImageField(upload_to='qr_codes/', null=True, blank=True, help_text='Generated QR code image')
     
     class Meta:
         verbose_name = 'QR Authentication Request'

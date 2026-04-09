@@ -52,6 +52,8 @@ INSTALLED_APPS = [
     'drf_spectacular_sidecar',
 
     'core.auth_',
+    'core.profiles',
+    # 'core.books',
 
 ]
 
@@ -194,13 +196,12 @@ SIMPLE_JWT = {
     "SLIDING_TOKEN_REFRESH_SERIALIZER": "rest_framework_simplejwt.serializers.TokenRefreshSlidingSerializer",
 }
 
-
 SPECTACULAR_SETTINGS = {
     'TITLE': 'OpenPage API',
     'DESCRIPTION': 'API Documentation',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
-    'SECURITY': [{'jwtAuth': []}],
+    'SECURITY': [{'Bearer': []}],   # ← замените 'jwtAuth' на 'Bearer'
     'COMPONENT_SPLIT_REQUEST': True,
     'SCHEMA_PATH_PREFIX': '/api/',
     'SECURITY_DEFINITIONS': {
@@ -208,9 +209,6 @@ SPECTACULAR_SETTINGS = {
             'type': 'http',
             'scheme': 'bearer',
             'bearerFormat': 'JWT',
-            'in': 'header',
-            'name': 'Authorization',
-            'description': 'Enter your JWT access token in the format: `Bearer {token}`'
         },
         'ApiKeyAuth': {
             'type': 'apiKey',
@@ -221,13 +219,10 @@ SPECTACULAR_SETTINGS = {
     },
     'SWAGGER_UI_SETTINGS': {
         'persistAuthorization': True,
-        'docExpansion': 'list',
+        'docExpiration': 'list',
         'displayRequestDuration': True,
         'filter': True,
     },
-    'EXTENSIONS': [
-        'core.auth_.openapi_extensions',
-    ],
 }
 
 REDIS_HOST = os.environ.get('REDIS_HOST', 'redis')
@@ -263,6 +258,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')

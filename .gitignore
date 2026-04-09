@@ -9,4 +9,5 @@ local_settings.py
 instance/
 .env
 staticfiles/
-.media
+media/
+static/
