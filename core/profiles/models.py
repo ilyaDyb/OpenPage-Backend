@@ -52,7 +52,7 @@ class ReaderProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='reader_profile', verbose_name='Пользователь')
     avatar = models.ImageField(upload_to='avatars/readers/', blank=True, null=True, verbose_name='Аватар')
     is_active = models.BooleanField(default=True, verbose_name='Активен', help_text='Может ли пользователь использовать профиль')
-    # preferred_genres = models.ManyToManyField('books.Genre', blank=True, related_name='readers', verbose_name='Предпочитаемые жанры')
+    preferred_genres = models.ManyToManyField('books.Genre', blank=True, related_name='readers', verbose_name='Предпочитаемые жанры')
     books_read = models.PositiveIntegerField(default=0, verbose_name='Прочитано книг')
     reviews_written = models.PositiveIntegerField(default=0, verbose_name='Написано отзывов')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
@@ -71,7 +71,7 @@ class Bookmark(models.Model):
     """Закладка в книге"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     reader = models.ForeignKey(ReaderProfile, on_delete=models.CASCADE, related_name='bookmarks', verbose_name='Читатель')
-    # book = models.ForeignKey('books.Book', on_delete=models.CASCADE, related_name='bookmarks', verbose_name='Книга')
+    book = models.ForeignKey('books.Book', on_delete=models.CASCADE, related_name='bookmarks', verbose_name='Книга', null=True, blank=True)
     page_number = models.PositiveIntegerField(verbose_name='Номер страницы')
     note = models.TextField(blank=True, max_length=500, verbose_name='Заметка')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
@@ -90,7 +90,7 @@ class ReadingHistory(models.Model):
     """История чтения"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     reader = models.ForeignKey(ReaderProfile, on_delete=models.CASCADE, related_name='reading_history', verbose_name='Читатель')
-    # book = models.ForeignKey('books.Book', on_delete=models.CASCADE, related_name='reading_history', verbose_name='Книга')
+    book = models.ForeignKey('books.Book', on_delete=models.CASCADE, related_name='reading_history', verbose_name='Книга', null=True, blank=True)
     started_at = models.DateTimeField(auto_now_add=True, verbose_name='Начало чтения')
     finished_at = models.DateTimeField(null=True, blank=True, verbose_name='Окончание чтения')
     last_page_read = models.PositiveIntegerField(default=0, verbose_name='Последняя прочитанная страница')
@@ -122,7 +122,7 @@ class Review(models.Model):
     """Отзыв о книге"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     reader = models.ForeignKey(ReaderProfile, on_delete=models.CASCADE, related_name='reviews', verbose_name='Читатель')
-    # book = models.ForeignKey('books.Book', on_delete=models.CASCADE, related_name='reviews', verbose_name='Книга')
+    book = models.ForeignKey('books.Book', on_delete=models.CASCADE, related_name='reviews', verbose_name='Книга', null=True, blank=True)
     rating = models.PositiveSmallIntegerField(validators=[MinValueValidator(1), MaxValueValidator(5)], verbose_name='Рейтинг')
     text = models.TextField(max_length=2000, verbose_name='Текст отзыва')
     is_verified_purchase = models.BooleanField(default=False, verbose_name='Проверенная покупка')

@@ -53,7 +53,7 @@ INSTALLED_APPS = [
 
     'core.auth_.apps.AuthConfig',
     'core.profiles.apps.ProfilesConfig',
-    # 'core.books',
+    'core.books.apps.BooksConfig',
 
 ]
 
