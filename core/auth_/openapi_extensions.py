@@ -21,5 +21,5 @@ class CustomJWTAuthenticationScheme(OpenApiAuthenticationExtension):
             'bearerFormat': 'JWT',
             'in': 'header',
             'name': 'Authorization',
-            'description': 'Enter your JWT access token in the format: `Bearer {token}`'
+            'description': 'Paste the JWT access token only. Swagger UI will send it as a Bearer token.'
         }

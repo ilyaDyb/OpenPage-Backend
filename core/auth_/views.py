@@ -33,6 +33,7 @@ class MyTokenObtaionPairView(TokenObtainPairView):
 
 class RegisterView(generics.CreateAPIView):
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
     @extend_schema(
         request=UserCreateSerializer,
@@ -69,6 +70,7 @@ class RegisterView(generics.CreateAPIView):
 
 
 class LoginView(APIView):
+    authentication_classes = []
 
     @extend_schema(
         request={
@@ -117,6 +119,7 @@ class LoginView(APIView):
 
 class VerifyEmailView(APIView):
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
     @extend_schema(
         request=EmailVerifySerializer,
@@ -166,6 +169,7 @@ class LoginChoiceView(APIView):
     Suggests email or Telegram QR code login.
     """
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
     @extend_schema(
         responses={
@@ -199,6 +203,7 @@ class QRAuthCreateView(APIView):
     Returns a token and QR link for the frontend.
     """
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
     serializer_class = QRAuthRequestSerializer
 
     @extend_schema(
@@ -257,6 +262,7 @@ class QRAuthStatusView(APIView):
     Frontend polls this endpoint until authentication is complete.
     """
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
     @extend_schema(
         summary="Check QR Authentication Status",
@@ -347,6 +353,7 @@ class QRAuthConfirmView(APIView):
     Called when user scans QR code and sends /start command.
     """
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
     @extend_schema(
         request=QRAuthConfirmSerializer,
@@ -437,6 +444,7 @@ class QRAuthConfirmedView(APIView):
     Called when user clicks "Confirm Login" button in Telegram bot.
     """
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
     @extend_schema(
         request=QRAuthConfirmedSerializer,
@@ -488,6 +496,7 @@ class QRAuthCancelView(APIView):
     Can be called by frontend or Telegram bot.
     """
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
 
     @extend_schema(
         request=OpenApiTypes.OBJECT,

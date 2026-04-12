@@ -51,8 +51,8 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'drf_spectacular_sidecar',
 
-    'core.auth_',
-    'core.profiles',
+    'core.auth_.apps.AuthConfig',
+    'core.profiles.apps.ProfilesConfig',
     # 'core.books',
 
 ]
@@ -201,20 +201,16 @@ SPECTACULAR_SETTINGS = {
     'DESCRIPTION': 'API Documentation',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
-    'SECURITY': [{'Bearer': []}],   # ← замените 'jwtAuth' на 'Bearer'
     'COMPONENT_SPLIT_REQUEST': True,
     'SCHEMA_PATH_PREFIX': '/api/',
-    'SECURITY_DEFINITIONS': {
-        'Bearer': {
-            'type': 'http',
-            'scheme': 'bearer',
-            'bearerFormat': 'JWT',
-        },
-        'ApiKeyAuth': {
-            'type': 'apiKey',
-            'in': 'header',
-            'name': 'X-Secret-Key',
-            'description': 'Secret key for API authentication (for bot communication)'
+    'APPEND_COMPONENTS': {
+        'securitySchemes': {
+            'ApiKeyAuth': {
+                'type': 'apiKey',
+                'in': 'header',
+                'name': 'X-Secret-Key',
+                'description': 'Secret key for API authentication (for bot communication)'
+            }
         }
     },
     'SWAGGER_UI_SETTINGS': {

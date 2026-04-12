@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:14
@@ -42,10 +40,9 @@ services:
         condition: service_healthy
     env_file:
       - .env
-      
-    command: python manage.py runserver 0.0.0.0:8000
+    command: python -m core.open_page.devserver
     restart: always
-    
+
 volumes:
   postgres_data:
   static_volume:
