@@ -1,458 +1,370 @@
-# """
-# Views для закладок, истории чтения и отзывов
-# """
-# import logging
-# from rest_framework import status, permissions
-# from rest_framework.response import Response
-# from rest_framework.views import APIView
-# from rest_framework.generics import (
-#     ListAPIView, RetrieveAPIView, CreateAPIView,
-#     UpdateAPIView, DestroyAPIView, get_object_or_404
-# )
-# from drf_spectacular.utils import extend_schema, OpenApiTypes
-# from core.profiles.models import Bookmark, ReadingHistory, Review, ReaderProfile, AuthorProfile
-# from core.books.reading_serializers import (
-#     BookmarkSerializer,
-#     ReadingHistorySerializer,
-#     ReviewSerializer,
-#     ReviewCreateSerializer
-# )
-# from core.books.permissions import IsOwner, IsReader, IsModerator
+"""Views for bookmarks, reading history, reviews, and author requests."""
+import logging
 
-# logger = logging.getLogger(__name__)
+from django.utils import timezone
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema
+from rest_framework import permissions, status
+from rest_framework.generics import (
+    CreateAPIView,
+    DestroyAPIView,
+    ListAPIView,
+    RetrieveAPIView,
+    UpdateAPIView,
+    get_object_or_404,
+)
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
-
-# # ==================== Bookmark Views ====================
-
-# class BookmarkListView(ListAPIView):
-#     """Список закладок текущего читателя"""
-#     serializer_class = BookmarkSerializer
-#     permission_classes = [permissions.IsAuthenticated, IsReader]
-    
-#     @extend_schema(
-#         summary="Мои закладки",
-#         description="Список всех закладок текущего пользователя",
-#         tags=['Reading Features'],
-#         responses={200: BookmarkSerializer(many=True)}
-#     )
-#     def get(self, request, *args, **kwargs):
-#         logger.info(f"📥 GET /api/bookmarks/ - Закладки пользователя: {request.user.username}")
-        
-#         reader_profile = request.user.reader_profile
-#         queryset = Bookmark.objects.filter(reader=reader_profile).select_related('book')
-        
-#         serializer = self.get_serializer(queryset, many=True)
-#         return Response(serializer.data)
+from core.books.permissions import IsModeratorOrStaff, IsOwner, IsReader
+from core.books.reading_serializers import (
+    AuthorRequestCreateSerializer,
+    AuthorRequestModerationSerializer,
+    AuthorRequestSerializer,
+    BookmarkSerializer,
+    ReadingHistorySerializer,
+    ReviewCreateSerializer,
+    ReviewSerializer,
+)
+from core.books.reading_api import sync_reader_books_read
+from core.profiles.models import AuthorProfile, Bookmark, ReadingHistory, Review
 
 
-# class BookmarkCreateView(CreateAPIView):
-#     """Создание закладки"""
-#     serializer_class = BookmarkSerializer
-#     permission_classes = [permissions.IsAuthenticated, IsReader]
-    
-#     @extend_schema(
-#         summary="Добавить закладку",
-#         description="Создать новую закладку для книги",
-#         tags=['Reading Features'],
-#         request=BookmarkSerializer,
-#         responses={
-#             201: BookmarkSerializer,
-#             400: OpenApiTypes.OBJECT
-#         }
-#     )
-#     def post(self, request, *args, **kwargs):
-#         logger.info(f"📝 POST /api/bookmarks/ - Создание закладки: {request.user.username}")
-#         return super().post(request, *args, **kwargs)
-    
-#     def perform_create(self, serializer):
-#         """Сохраняем закладку с текущим читателем"""
-#         reader_profile = self.request.user.reader_profile
-        
-#         # Проверяем, существует ли уже такая закладка
-#         book = serializer.validated_data.get('book')
-#         page_number = serializer.validated_data.get('page_number')
-        
-#         existing = Bookmark.objects.filter(
-#             reader=reader_profile,
-#             book=book,
-#             page_number=page_number
-#         ).first()
-        
-#         if existing:
-#             raise Exception("Такая закладка уже существует")
-        
-#         serializer.save(reader=reader_profile)
-#         logger.info(f"✅ Закладка создана: книга {book.title}, стр. {page_number}")
+logger = logging.getLogger(__name__)
 
 
-# class BookmarkDeleteView(DestroyAPIView):
-#     """Удаление закладки"""
-#     serializer_class = BookmarkSerializer
-#     permission_classes = [permissions.IsAuthenticated, IsOwner]
-#     queryset = Bookmark.objects.all()
-#     lookup_field = 'pk'
-    
-#     @extend_schema(
-#         summary="Удалить закладку",
-#         description="Удалить закладку по ID",
-#         tags=['Reading Features'],
-#         responses={204: None, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT}
-#     )
-#     def delete(self, request, *args, **kwargs):
-#         pk = kwargs.get('pk')
-#         logger.info(f"🗑️ DELETE /api/bookmarks/{pk}/ - Удаление закладки")
-#         return super().delete(request, *args, **kwargs)
+class BookmarkListView(ListAPIView):
+    serializer_class = BookmarkSerializer
+    permission_classes = [permissions.IsAuthenticated, IsReader]
+
+    def get_queryset(self):
+        return Bookmark.objects.filter(reader=self.request.user.reader_profile).select_related('book')
+
+    @extend_schema(
+        summary='My bookmarks',
+        description='List all bookmarks of the current reader.',
+        tags=['Reading Features'],
+        responses={200: BookmarkSerializer(many=True)},
+    )
+    def get(self, request, *args, **kwargs):
+        logger.info("GET /api/reading/bookmarks/ for user %s", request.user.username)
+        return super().get(request, *args, **kwargs)
 
 
-# # ==================== Reading History Views ====================
+class BookmarkCreateView(CreateAPIView):
+    serializer_class = BookmarkSerializer
+    permission_classes = [permissions.IsAuthenticated, IsReader]
 
-# class ReadingHistoryListView(ListAPIView):
-#     """Список истории чтения текущего читателя"""
-#     serializer_class = ReadingHistorySerializer
-#     permission_classes = [permissions.IsAuthenticated, IsReader]
-    
-#     @extend_schema(
-#         summary="История чтения",
-#         description="Список всех книг в истории чтения с прогрессом",
-#         tags=['Reading Features'],
-#         responses={200: ReadingHistorySerializer(many=True)}
-#     )
-#     def get(self, request, *args, **kwargs):
-#         logger.info(f"📥 GET /api/reading-history/ - История чтения: {request.user.username}")
-        
-#         reader_profile = request.user.reader_profile
-#         queryset = ReadingHistory.objects.filter(
-#             reader=reader_profile
-#         ).select_related('book').order_by('-started_at')
-        
-#         serializer = self.get_serializer(queryset, many=True)
-#         return Response(serializer.data)
+    @extend_schema(
+        summary='Create bookmark',
+        description='Create a new bookmark for a book.',
+        tags=['Reading Features'],
+        request=BookmarkSerializer,
+        responses={201: BookmarkSerializer, 400: OpenApiTypes.OBJECT},
+    )
+    def post(self, request, *args, **kwargs):
+        logger.info("POST /api/reading/bookmarks/create/ for user %s", request.user.username)
+        return super().post(request, *args, **kwargs)
 
 
-# class ReadingHistoryCreateView(CreateAPIView):
-#     """Начать чтение книги (создать запись в истории)"""
-#     serializer_class = ReadingHistorySerializer
-#     permission_classes = [permissions.IsAuthenticated, IsReader]
-    
-#     @extend_schema(
-#         summary="Начать чтение",
-#         description="Создать запись в истории чтения для новой книги",
-#         tags=['Reading Features'],
-#         request=ReadingHistorySerializer,
-#         responses={
-#             201: ReadingHistorySerializer,
-#             400: OpenApiTypes.OBJECT
-#         }
-#     )
-#     def post(self, request, *args, **kwargs):
-#         logger.info(f"📝 POST /api/reading-history/ - Начало чтения: {request.user.username}")
-#         return super().post(request, *args, **kwargs)
-    
-#     def perform_create(self, serializer):
-#         """Сохраняем историю с текущим читателем"""
-#         reader_profile = self.request.user.reader_profile
-#         serializer.save(reader=reader_profile)
+class BookmarkDeleteView(DestroyAPIView):
+    queryset = Bookmark.objects.select_related('reader__user', 'book')
+    serializer_class = BookmarkSerializer
+    permission_classes = [permissions.IsAuthenticated, IsOwner]
+    lookup_field = 'pk'
+
+    @extend_schema(
+        summary='Delete bookmark',
+        description='Delete bookmark by ID.',
+        tags=['Reading Features'],
+        responses={204: None, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
+    def delete(self, request, *args, **kwargs):
+        logger.info("DELETE /api/reading/bookmarks/%s/delete/", kwargs.get('pk'))
+        return super().delete(request, *args, **kwargs)
 
 
-# class ReadingHistoryUpdateView(UpdateAPIView):
-#     """Обновление прогресса чтения"""
-#     serializer_class = ReadingHistorySerializer
-#     permission_classes = [permissions.IsAuthenticated, IsOwner]
-#     queryset = ReadingHistory.objects.all()
-#     lookup_field = 'pk'
-    
-#     @extend_schema(
-#         summary="Обновить прогресс",
-#         description="Обновить прогресс чтения книги (номер страницы)",
-#         tags=['Reading Features'],
-#         request=ReadingHistorySerializer,
-#         responses={
-#             200: ReadingHistorySerializer,
-#             400: OpenApiTypes.OBJECT,
-#             403: OpenApiTypes.OBJECT
-#         }
-#     )
-#     def patch(self, request, *args, **kwargs):
-#         pk = kwargs.get('pk')
-#         logger.info(f"🔧 PATCH /api/reading-history/{pk}/ - Обновление прогресса")
-#         return super().patch(request, *args, **kwargs)
-    
-#     def partial_update(self, request, *args, **kwargs):
-#         """Частичное обновление"""
-#         instance = self.get_object()
-#         last_page_read = request.data.get('last_page_read')
-        
-#         if last_page_read is not None:
-#             total_pages = instance.book.pages if instance.book.pages > 0 else 1
-#             instance.update_progress(int(last_page_read), total_pages)
-#             logger.info(f"✅ Прогресс обновлен: {instance.progress_percentage}%")
-        
-#         serializer = self.get_serializer(instance)
-#         return Response(serializer.data)
+class ReadingHistoryListView(ListAPIView):
+    serializer_class = ReadingHistorySerializer
+    permission_classes = [permissions.IsAuthenticated, IsReader]
+
+    def get_queryset(self):
+        return ReadingHistory.objects.filter(reader=self.request.user.reader_profile).select_related('book')
+
+    @extend_schema(
+        summary='Reading history',
+        description='List reading history with progress of the current reader.',
+        tags=['Reading Features'],
+        responses={200: ReadingHistorySerializer(many=True)},
+    )
+    def get(self, request, *args, **kwargs):
+        logger.info("GET /api/reading/reading-history/ for user %s", request.user.username)
+        return super().get(request, *args, **kwargs)
 
 
-# # ==================== Review Views ====================
+class ReadingHistoryCreateView(CreateAPIView):
+    serializer_class = ReadingHistorySerializer
+    permission_classes = [permissions.IsAuthenticated, IsReader]
 
-# class ReviewListView(ListAPIView):
-#     """Список отзывов с фильтрацией"""
-#     serializer_class = ReviewSerializer
-#     permission_classes = [permissions.IsAuthenticated]
-    
-#     @extend_schema(
-#         summary="Список отзывов",
-#         description="Список всех отзывов или отзывов для конкретной книги",
-#         tags=['Reading Features'],
-#         parameters=[],
-#         responses={200: ReviewSerializer(many=True)}
-#     )
-#     def get(self, request, *args, **kwargs):
-#         logger.info(f"📥 GET /api/reviews/ - Список отзывов")
-        
-#         book_id = request.query_params.get('book')
-        
-#         if book_id:
-#             queryset = Review.objects.filter(book_id=book_id).select_related('reader__user', 'book')
-#         else:
-#             queryset = Review.objects.all().select_related('reader__user', 'book').order_by('-created_at')
-        
-#         serializer = self.get_serializer(queryset, many=True)
-#         return Response(serializer.data)
+    @extend_schema(
+        summary='Start reading',
+        description='Create reading history for a new book, or return the existing history for it.',
+        tags=['Reading Features'],
+        request=ReadingHistorySerializer,
+        responses={200: ReadingHistorySerializer, 201: ReadingHistorySerializer, 400: OpenApiTypes.OBJECT},
+    )
+    def post(self, request, *args, **kwargs):
+        logger.info("POST /api/reading/reading-history/create/ for user %s", request.user.username)
+        context = self.get_serializer_context()
+        context['allow_existing_history'] = True
+        serializer = self.get_serializer(data=request.data, context=context)
+        serializer.is_valid(raise_exception=True)
 
+        book = serializer.validated_data['book']
+        reader_profile = request.user.reader_profile
+        existing = ReadingHistory.objects.filter(reader=reader_profile, book=book).first()
+        if existing:
+            output = self.get_serializer(existing)
+            return Response(output.data, status=status.HTTP_200_OK)
 
-# class ReviewCreateView(CreateAPIView):
-#     """Создание отзыва"""
-#     serializer_class = ReviewCreateSerializer
-#     permission_classes = [permissions.IsAuthenticated, IsReader]
-    
-#     @extend_schema(
-#         summary="Оставить отзыв",
-#         description="Создать новый отзыв на книгу (один отзыв на книгу)",
-#         tags=['Reading Features'],
-#         request=ReviewCreateSerializer,
-#         responses={
-#             201: ReviewSerializer,
-#             400: OpenApiTypes.OBJECT
-#         }
-#     )
-#     def post(self, request, *args, **kwargs):
-#         logger.info(f"📝 POST /api/reviews/ - Создание отзыва: {request.user.username}")
-#         return super().post(request, *args, **kwargs)
-    
-#     def perform_create(self, serializer):
-#         """Сохраняем отзыв с текущим читателем"""
-#         reader_profile = self.request.user.reader_profile
-#         serializer.save(reader=reader_profile)
-#         logger.info(f"✅ Отзыв создан на книгу: {serializer.validated_data['book'].title}")
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def perform_create(self, serializer):
+        history = serializer.save()
+        sync_reader_books_read(history.reader)
 
 
-# class ReviewDetailView(RetrieveAPIView):
-#     """Детальный просмотр отзыва"""
-#     queryset = Review.objects.all()
-#     serializer_class = ReviewSerializer
-#     permission_classes = [permissions.IsAuthenticated]
-#     lookup_field = 'pk'
-    
-#     @extend_schema(
-#         summary="Детали отзыва",
-#         description="Полная информация об отзыве",
-#         tags=['Reading Features'],
-#         responses={200: ReviewSerializer, 404: OpenApiTypes.OBJECT}
-#     )
-#     def get(self, request, *args, **kwargs):
-#         pk = kwargs.get('pk')
-#         logger.info(f"📥 GET /api/reviews/{pk}/ - Детали отзыва")
-#         return super().get(request, *args, **kwargs)
+class ReadingHistoryUpdateView(UpdateAPIView):
+    queryset = ReadingHistory.objects.select_related('reader__user', 'book')
+    serializer_class = ReadingHistorySerializer
+    permission_classes = [permissions.IsAuthenticated, IsOwner]
+    lookup_field = 'pk'
+
+    @extend_schema(
+        summary='Update reading progress',
+        description='Update reading progress for an existing history record.',
+        tags=['Reading Features'],
+        request=ReadingHistorySerializer,
+        responses={200: ReadingHistorySerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT},
+    )
+    def patch(self, request, *args, **kwargs):
+        logger.info("PATCH /api/reading/reading-history/%s/update/", kwargs.get('pk'))
+        return super().patch(request, *args, **kwargs)
+
+    def perform_update(self, serializer):
+        history = serializer.save()
+        sync_reader_books_read(history.reader)
 
 
-# class ReviewHelpfulView(APIView):
-#     """Голосование за полезность отзыва"""
-#     permission_classes = [permissions.IsAuthenticated]
-    
-#     @extend_schema(
-#         summary="Отметить как полезный",
-#         description="Увеличить счетчик полезных голосов отзыва",
-#         tags=['Reading Features'],
-#         responses={
-#             200: OpenApiTypes.OBJECT,
-#             404: OpenApiTypes.OBJECT
-#         }
-#     )
-#     def post(self, request, pk):
-#         logger.info(f"👍 POST /api/reviews/{pk}/helpful/ - Голос за полезность")
-        
-#         review = get_object_or_404(Review, pk=pk)
-#         review.mark_as_helpful()
-        
-#         return Response({
-#             'success': True,
-#             'helpful_count': review.helpful_count
-#         })
+class ReviewListView(ListAPIView):
+    serializer_class = ReviewSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = Review.objects.select_related('reader__user', 'book').order_by('-created_at')
+        book_id = self.request.query_params.get('book')
+        if book_id:
+            queryset = queryset.filter(book_id=book_id)
+        return queryset
+
+    @extend_schema(
+        summary='List reviews',
+        description='List all reviews or filter them by book.',
+        tags=['Reading Features'],
+        parameters=[OpenApiParameter(name='book', required=False, type=str, description='Book ID')],
+        responses={200: ReviewSerializer(many=True)},
+    )
+    def get(self, request, *args, **kwargs):
+        logger.info("GET /api/reading/reviews/")
+        return super().get(request, *args, **kwargs)
 
 
-# class ReviewDeleteView(DestroyAPIView):
-#     """Удаление отзыва"""
-#     queryset = Review.objects.all()
-#     serializer_class = ReviewSerializer
-#     permission_classes = [permissions.IsAuthenticated, IsOwner]
-#     lookup_field = 'pk'
-    
-#     @extend_schema(
-#         summary="Удалить отзыв",
-#         description="Удалить свой отзыв",
-#         tags=['Reading Features'],
-#         responses={204: None, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT}
-#     )
-#     def delete(self, request, *args, **kwargs):
-#         pk = kwargs.get('pk')
-#         logger.info(f"🗑️ DELETE /api/reviews/{pk}/ - Удаление отзыва")
-#         return super().delete(request, *args, **kwargs)
+class ReviewCreateView(CreateAPIView):
+    serializer_class = ReviewCreateSerializer
+    permission_classes = [permissions.IsAuthenticated, IsReader]
+
+    @extend_schema(
+        summary='Create review',
+        description='Create a new review for a book.',
+        tags=['Reading Features'],
+        request=ReviewCreateSerializer,
+        responses={201: ReviewSerializer, 400: OpenApiTypes.OBJECT},
+    )
+    def post(self, request, *args, **kwargs):
+        logger.info("POST /api/reading/reviews/create/ for user %s", request.user.username)
+        return super().post(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        review = serializer.save()
+        output = ReviewSerializer(review, context=self.get_serializer_context())
+        headers = self.get_success_headers(output.data)
+        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
-# # ==================== Author Request Views ====================
+class ReviewDetailView(RetrieveAPIView):
+    queryset = Review.objects.select_related('reader__user', 'book')
+    serializer_class = ReviewSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'pk'
 
-# class AuthorRequestView(APIView):
-#     """Запрос на получение статуса автора"""
-#     permission_classes = [permissions.IsAuthenticated]
-    
-#     @extend_schema(
-#         summary="Запросить статус автора",
-#         description="Создать профиль автора с запросом на модерацию",
-#         tags=['Author Management'],
-#         responses={
-#             201: OpenApiTypes.OBJECT,
-#             400: OpenApiTypes.OBJECT
-#         }
-#     )
-#     def post(self, request):
-#         logger.info(f"📝 POST /api/author/request/ - Запрос статуса автора: {request.user.username}")
-        
-#         # Проверяем, есть ли уже профиль автора
-#         if hasattr(request.user, 'author_profile'):
-#             author_profile = request.user.author_profile
-            
-#             if author_profile.is_approved:
-#                 return Response(
-#                     {'error': 'У вас уже есть подтвержденный профиль автора'},
-#                     status=status.HTTP_400_BAD_REQUEST
-#                 )
-            
-#             return Response(
-#                 {
-#                     'message': 'Ваш запрос уже отправлен и ожидает модерации',
-#                     'requested_at': author_profile.requested_at
-#                 },
-#                 status=status.HTTP_400_BAD_REQUEST
-#             )
-        
-#         # Создаем профиль автора
-#         bio = request.data.get('bio', '')
-#         website = request.data.get('website', '')
-#         telegram = request.data.get('telegram', '')
-#         vkontakte = request.data.get('vkontakte', '')
-        
-#         author_profile = AuthorProfile.objects.create(
-#             user=request.user,
-#             bio=bio,
-#             website=website,
-#             telegram=telegram,
-#             vkontakte=vkontakte,
-#             is_approved=False,
-#             requested_at=timezone.now()
-#         )
-        
-#         logger.info(f"✅ Создан запрос на статус автора: {request.user.username}")
-        
-#         return Response({
-#             'message': 'Запрос отправлен на модерацию',
-#             'author_profile': {
-#                 'id': author_profile.id,
-#                 'is_approved': author_profile.is_approved,
-#                 'requested_at': author_profile.requested_at
-#             }
-#         }, status=status.HTTP_201_CREATED)
+    @extend_schema(
+        summary='Review details',
+        description='Get full review details.',
+        tags=['Reading Features'],
+        responses={200: ReviewSerializer, 404: OpenApiTypes.OBJECT},
+    )
+    def get(self, request, *args, **kwargs):
+        logger.info("GET /api/reading/reviews/%s/", kwargs.get('pk'))
+        return super().get(request, *args, **kwargs)
 
 
-# class AuthorRequestsListView(ListAPIView):
-#     """Список запросов на статус автора (для модераторов)"""
-#     serializer_class = None  # Будет переопределено
-#     permission_classes = [permissions.IsAuthenticated, IsModerator]
-    
-#     @extend_schema(
-#         summary="Все запросы авторов",
-#         description="Список всех неподтвержденных запросов на статус автора",
-#         tags=['Author Management'],
-#         responses={200: OpenApiTypes.OBJECT}
-#     )
-#     def get(self, request, *args, **kwargs):
-#         logger.info(f"📥 GET /api/author/requests/ - Запросы авторов (модератор)")
-        
-#         requests = AuthorProfile.objects.filter(
-#             is_approved=False
-#         ).select_related('user').order_by('requested_at')
-        
-#         data = []
-#         for author in requests:
-#             data.append({
-#                 'id': author.id,
-#                 'username': author.user.username,
-#                 'email': author.user.email,
-#                 'full_name': author.full_name,
-#                 'bio': author.bio,
-#                 'website': author.website,
-#                 'telegram': author.telegram,
-#                 'requested_at': author.requested_at
-#             })
-        
-#         return Response(data)
+class ReviewHelpfulView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @extend_schema(
+        summary='Mark review as helpful',
+        description='Increment helpful counter for a review.',
+        tags=['Reading Features'],
+        request=None,
+        responses={200: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
+    def post(self, request, pk):
+        logger.info("POST /api/reading/reviews/%s/helpful/", pk)
+        review = get_object_or_404(Review, pk=pk)
+        review.mark_as_helpful()
+        return Response({'success': True, 'helpful_count': review.helpful_count})
 
 
-# class AuthorRequestModerateView(APIView):
-#     """Модерация запроса на статус автора"""
-#     permission_classes = [permissions.IsAuthenticated, IsModerator]
-    
-#     @extend_schema(
-#         summary="Модерировать запрос",
-#         description="Подтвердить или отклонить запрос на статус автора",
-#         tags=['Author Management'],
-#         request=OpenApiTypes.OBJECT,
-#         responses={
-#             200: OpenApiTypes.OBJECT,
-#             400: OpenApiTypes.OBJECT,
-#             404: OpenApiTypes.OBJECT
-#         }
-#     )
-#     def patch(self, request, pk):
-#         logger.info(f"🔧 PATCH /api/author/requests/{pk}/moderate/ - Модерация запроса")
-        
-#         author_profile = get_object_or_404(AuthorProfile, pk=pk)
-        
-#         approve = request.data.get('approve')
-#         rejection_reason = request.data.get('rejection_reason', '')
-        
-#         if approve:
-#             author_profile.is_approved = True
-#             author_profile.approved_at = timezone.now()
-#             author_profile.save(update_fields=['is_approved', 'approved_at'])
-            
-#             logger.info(f"✅ Запрос одобрен: {author_profile.user.username}")
-            
-#             return Response({
-#                 'message': 'Автор подтвержден',
-#                 'approved_at': author_profile.approved_at
-#             })
-#         else:
-#             # Отклоняем запрос
-#             if rejection_reason:
-#                 logger.info(f"❌ Запрос отклонен: {rejection_reason}")
-            
-#             # Удаляем профиль автора (или можно просто установить флаг)
-#             author_profile.delete()
-            
-#             return Response({
-#                 'message': 'Запрос отклонен',
-#                 'reason': rejection_reason
-#             })
+class ReviewDeleteView(DestroyAPIView):
+    queryset = Review.objects.select_related('reader__user', 'book')
+    serializer_class = ReviewSerializer
+    permission_classes = [permissions.IsAuthenticated, IsOwner]
+    lookup_field = 'pk'
+
+    @extend_schema(
+        summary='Delete review',
+        description='Delete your own review.',
+        tags=['Reading Features'],
+        responses={204: None, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
+    def delete(self, request, *args, **kwargs):
+        logger.info("DELETE /api/reading/reviews/%s/delete/", kwargs.get('pk'))
+        return super().delete(request, *args, **kwargs)
+
+    def perform_destroy(self, instance):
+        reader = instance.reader
+        super().perform_destroy(instance)
+        reader.reviews_written = Review.objects.filter(reader=reader).count()
+        reader.save(update_fields=['reviews_written'])
 
 
-# # Импорты
-# from django.utils import timezone
+class AuthorRequestView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @extend_schema(
+        summary='Request author status',
+        description='Create an author profile request for moderation.',
+        tags=['Author Management'],
+        request=AuthorRequestCreateSerializer,
+        responses={201: AuthorRequestSerializer, 400: OpenApiTypes.OBJECT},
+    )
+    def post(self, request):
+        logger.info("POST /api/reading/author/request/ for user %s", request.user.username)
+
+        if hasattr(request.user, 'author_profile'):
+            author_profile = request.user.author_profile
+            if author_profile.is_approved:
+                return Response(
+                    {'detail': 'You already have an approved author profile.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            return Response(
+                {
+                    'detail': 'Your author request is already pending moderation.',
+                    'requested_at': author_profile.requested_at,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = AuthorRequestCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        author_profile = serializer.save(
+            user=request.user,
+            is_approved=False,
+            requested_at=timezone.now(),
+        )
+
+        return Response(
+            AuthorRequestSerializer(author_profile).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AuthorRequestsListView(ListAPIView):
+    serializer_class = AuthorRequestSerializer
+    permission_classes = [permissions.IsAuthenticated, IsModeratorOrStaff]
+
+    def get_queryset(self):
+        return AuthorProfile.objects.filter(is_approved=False).select_related('user').order_by('requested_at')
+
+    @extend_schema(
+        summary='List author requests',
+        description='List pending author requests for moderators and staff.',
+        tags=['Author Management'],
+        responses={200: AuthorRequestSerializer(many=True)},
+    )
+    def get(self, request, *args, **kwargs):
+        logger.info("GET /api/reading/author/requests/")
+        return super().get(request, *args, **kwargs)
+
+
+class AuthorRequestModerateView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsModeratorOrStaff]
+
+    @extend_schema(
+        summary='Moderate author request',
+        description='Approve or reject an author request.',
+        tags=['Author Management'],
+        request=AuthorRequestModerationSerializer,
+        responses={200: OpenApiTypes.OBJECT, 400: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
+    def patch(self, request, pk):
+        logger.info("PATCH /api/reading/author/requests/%s/moderate/", pk)
+        serializer = AuthorRequestModerationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        author_profile = get_object_or_404(AuthorProfile, pk=pk)
+        approve = serializer.validated_data['approve']
+        rejection_reason = serializer.validated_data.get('rejection_reason', '')
+
+        if approve:
+            author_profile.is_approved = True
+            author_profile.approved_at = timezone.now()
+            author_profile.save(update_fields=['is_approved', 'approved_at'])
+
+            user = author_profile.user
+            user.is_author = True
+            if getattr(user, 'role', 'reader') == 'reader':
+                user.role = 'author'
+            user.save(update_fields=['is_author', 'role'])
+
+            return Response(
+                {
+                    'message': 'Author request approved.',
+                    'approved_at': author_profile.approved_at,
+                    'author_profile_id': str(author_profile.pk),
+                }
+            )
+
+        author_profile.delete()
+        return Response(
+            {
+                'message': 'Author request rejected.',
+                'reason': rejection_reason,
+            }
+        )

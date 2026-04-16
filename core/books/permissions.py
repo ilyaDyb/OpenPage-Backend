@@ -1,99 +1,99 @@
-"""
-Permission classes для ограничения доступа
-"""
 from rest_framework import permissions
-from core.profiles.models import AuthorProfile
+
+from core.books.models import BookStatus
 
 
-class IsOwner(permissions.BasePermission):
-    """
-    Проверка, что объект принадлежит текущему пользователю
-    Используется для закладок, отзывов, истории чтения
-    """
-    
-    def has_object_permission(self, request, view, obj):
-        # Разрешаем безопасные методы (GET, HEAD, OPTIONS) всем авторизованным
-        if request.method in permissions.SAFE_METHODS:
-            return request.user.is_authenticated
-        
-        # Для остальных методов проверяем владение
-        if hasattr(obj, 'reader'):
-            return obj.reader.user == request.user
-        
-        if hasattr(obj, 'user'):
-            return obj.user == request.user
-        
+def is_moderator_or_staff(user):
+    return (
+        user.is_staff
+        or user.is_superuser
+        or getattr(user, 'role', None) in {'moderator', 'admin'}
+    )
+
+
+def get_author_profile(user):
+    try:
+        return user.author_profile
+    except Exception:
+        return None
+
+
+def has_reader_profile(user):
+    try:
+        return user.reader_profile is not None
+    except Exception:
         return False
 
 
-class IsAuthor(permissions.BasePermission):
-    """
-    Проверка, что пользователь имеет подтвержденный профиль автора
-    """
-    
+class IsModeratorOrStaff(permissions.BasePermission):
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             return False
-        
-        # Проверяем наличие профиля автора и его подтверждение
-        try:
-            author_profile = request.user.author_profile
-            return author_profile.is_approved
-        except AuthorProfile.DoesNotExist:
-            return False
+
+        return is_moderator_or_staff(request.user)
 
 
-class IsModerator(permissions.BasePermission):
-    """
-    Проверка, что пользователь имеет роль модератора или администратора
-    """
-    
+class IsApprovedAuthor(permissions.BasePermission):
+    message = 'Only approved authors can perform this action.'
+
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
             return False
-        
-        user = request.user
-        
-        # Проверяем роль пользователя
-        if hasattr(user, 'role'):
-            return user.role in ['moderator', 'admin']
-        
-        # Fallback: проверяем через is_staff/is_superuser
-        return user.is_staff or user.is_superuser
+
+        author_profile = get_author_profile(request.user)
+        return bool(author_profile and author_profile.is_approved)
+
+
+class IsBookAuthorOrStaff(permissions.BasePermission):
+    message = 'You are not allowed to modify this book.'
+
+    def has_object_permission(self, request, view, obj):
+        if not request.user.is_authenticated:
+            return False
+
+        if is_moderator_or_staff(request.user):
+            return True
+
+        return obj.authors.filter(user=request.user).exists()
+
+
+class CanViewBook(permissions.BasePermission):
+    message = 'This book is not available.'
+
+    def has_object_permission(self, request, view, obj):
+        if obj.status == BookStatus.PUBLISHED and obj.is_active:
+            return True
+
+        if not request.user.is_authenticated:
+            return False
+
+        if is_moderator_or_staff(request.user):
+            return True
+
+        return obj.authors.filter(user=request.user).exists()
 
 
 class IsReader(permissions.BasePermission):
-    """
-    Проверка, что пользователь имеет профиль читателя
-    """
-    
+    message = 'Reader profile is required.'
+
     def has_permission(self, request, view):
-        if not request.user.is_authenticated:
-            return False
-        
-        try:
-            _ = request.user.reader_profile
-            return True
-        except Exception:
-            return False
+        return bool(request.user.is_authenticated and has_reader_profile(request.user))
 
 
-class IsAuthorOrModerator(permissions.BasePermission):
-    """
-    Проверка: автор ИЛИ модератор
-    Используется для модерации книг
-    """
-    
-    def has_permission(self, request, view):
+class IsOwner(permissions.BasePermission):
+    message = 'You do not own this object.'
+
+    def has_object_permission(self, request, view, obj):
         if not request.user.is_authenticated:
             return False
-        
-        # Проверяем модератора
-        if hasattr(request.user, 'role') and request.user.role in ['moderator', 'admin']:
+
+        if is_moderator_or_staff(request.user):
             return True
-        
-        # Проверяем автора
-        try:
-            return request.user.author_profile.is_approved
-        except Exception:
-            return False
+
+        if hasattr(obj, 'reader') and obj.reader:
+            return obj.reader.user_id == request.user.id
+
+        if hasattr(obj, 'user') and obj.user:
+            return obj.user_id == request.user.id
+
+        return False

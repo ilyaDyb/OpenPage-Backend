@@ -5,6 +5,7 @@ from drf_spectacular.generators import SchemaGenerator
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from core.books.models import Genre
 from core.profiles.models import AuthorProfile, ReaderProfile
 
 
@@ -70,6 +71,7 @@ class ReaderProfileModelTests(TestCase):
 
 class ProfileAPITests(APITestCase):
     def setUp(self):
+        self.genre = Genre.objects.create(name='Fantasy')
         self.user = User.objects.create_user(
             username='testuser',
             email='test@test.com',
@@ -86,27 +88,19 @@ class ProfileAPITests(APITestCase):
     def test_get_current_user_profile_requires_authentication(self):
         response = self.client.get(reverse('profiles:current-user-profile'))
 
-        self.assertEqual(
-            response.status_code,
-            status.HTTP_401_UNAUTHORIZED,
-            response.content.decode('utf-8', errors='replace'),
-        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_get_current_user_profile_returns_nested_profiles(self):
         self.client.force_authenticate(user=self.user)
 
         response = self.client.get(reverse('profiles:current-user-profile'))
 
-        self.assertEqual(
-            response.status_code,
-            status.HTTP_200_OK,
-            response.content.decode('utf-8', errors='replace'),
-        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['username'], self.user.username)
         self.assertIsNotNone(response.data['reader_profile'])
         self.assertIsNone(response.data['author_profile'])
 
-    def test_patch_current_user_profile_updates_only_editable_fields(self):
+    def test_patch_current_user_profile_updates_user_and_reader_profile(self):
         self.client.force_authenticate(user=self.user)
 
         response = self.client.patch(
@@ -116,18 +110,48 @@ class ProfileAPITests(APITestCase):
                 'first_name': 'New',
                 'last_name': 'Name',
                 'role': 'admin',
+                'reader_profile': {
+                    'is_active': False,
+                    'preferred_genre_ids': [str(self.genre.id)],
+                },
             },
             format='json',
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.user.refresh_from_db()
+        self.user.reader_profile.refresh_from_db()
         self.assertEqual(self.user.email, 'newemail@test.com')
         self.assertEqual(self.user.first_name, 'New')
         self.assertEqual(self.user.last_name, 'Name')
         self.assertEqual(self.user.role, 'reader')
+        self.assertFalse(self.user.reader_profile.is_active)
+        self.assertEqual(
+            list(self.user.reader_profile.preferred_genres.values_list('id', flat=True)),
+            [self.genre.id],
+        )
 
-    def test_get_public_profile_by_id_is_available_without_auth(self):
+    def test_patch_current_user_profile_updates_author_profile(self):
+        AuthorProfile.objects.create(user=self.user, bio='Old bio')
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse('profiles:current-user-profile'),
+            {
+                'author_profile': {
+                    'bio': 'Updated bio',
+                    'telegram': '@updated',
+                }
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.author_profile.refresh_from_db()
+        self.assertEqual(self.user.author_profile.bio, 'Updated bio')
+        self.assertEqual(self.user.author_profile.telegram, '@updated')
+
+    def test_get_public_profile_by_id_is_available_without_auth_and_hides_email(self):
         response = self.client.get(
             reverse('profiles:public-user-profile', kwargs={'pk': self.user.pk})
         )
@@ -135,6 +159,7 @@ class ProfileAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['id'], self.user.id)
         self.assertEqual(response.data['username'], self.user.username)
+        self.assertNotIn('email', response.data)
 
     def test_get_public_profile_by_username_uses_dedicated_route(self):
         response = self.client.get(

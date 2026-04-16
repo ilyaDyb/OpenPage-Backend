@@ -8,7 +8,7 @@ from core.books.views import (
     BookListView,
     BookUpdateView,
     GenreDetailView,
-    GenreListView,
+    GenreListCreateView,
     MyBooksView,
 )
 
@@ -16,7 +16,7 @@ from core.books.views import (
 app_name = 'books'
 
 urlpatterns = [
-    path('genres/', GenreListView.as_view(), name='genre-list'),
+    path('genres/', GenreListCreateView.as_view(), name='genre-list'),
     path('genres/<uuid:pk>/', GenreDetailView.as_view(), name='genre-detail'),
     path('', BookListView.as_view(), name='book-list'),
     path('<uuid:pk>/', BookDetailView.as_view(), name='book-detail'),

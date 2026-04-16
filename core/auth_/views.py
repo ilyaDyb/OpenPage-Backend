@@ -59,9 +59,17 @@ class RegisterView(generics.CreateAPIView):
             'first_name': data.get('first_name', ''),
             'last_name': data.get('last_name', ''),
         }
-        store_registration_data(email, user_data, code)
 
-        send_verification_email(email, code)
+        try:
+            send_verification_email(email, code)
+        except Exception:
+            logger.exception("Failed to send verification email to %s", email)
+            return Response(
+                {"detail": "Failed to send verification code to this email."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        store_registration_data(email, user_data, code)
 
         return Response(
             {"detail": "Verification code sent to email."},

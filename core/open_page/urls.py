@@ -29,7 +29,7 @@ urlpatterns = [
     path('api/profile/', include('core.profiles.urls')),
     # КНИГИ - ВРЕМЕННО ОТКЛЮЧЕНО
     path('api/books/', include('core.books.urls')),
-    # path('api/reading/', include('core.books.reading_urls')),
+    path('api/reading/', include('core.books.reading_urls')),
     
     # Swagger URLs
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),

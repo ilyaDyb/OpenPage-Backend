@@ -1,7 +1,8 @@
-import re
+import socket
 from django.contrib.auth import get_user_model
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
+from rest_framework_simplejwt.exceptions import AuthenticationFailed
 
 from core.utils import exception_handler
 
@@ -34,3 +35,21 @@ def is_valid_email_format(email):
         return True
     except ValidationError:
         return False
+
+
+def email_domain_exists(email):
+    try:
+        domain = email.rsplit("@", 1)[1].strip().lower()
+    except IndexError:
+        return False
+
+    if not domain:
+        return False
+
+    try:
+        ascii_domain = domain.encode("idna").decode("ascii")
+        socket.getaddrinfo(ascii_domain, None)
+    except (UnicodeError, socket.gaierror, OSError):
+        return False
+
+    return True

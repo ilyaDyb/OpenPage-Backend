@@ -10,7 +10,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.profiles.models import AuthorProfile, ReaderProfile
-from core.profiles.serializers import AuthorProfileSerializer, UserProfileSerializer
+from core.profiles.serializers import (
+    AuthorProfileSerializer,
+    PublicUserProfileSerializer,
+    UserProfileSerializer,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -20,6 +24,11 @@ User = get_user_model()
 class CurrentUserProfileView(RetrieveUpdateAPIView):
     serializer_class = UserProfileSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return User.objects.select_related('reader_profile', 'author_profile').prefetch_related(
+            'reader_profile__preferred_genres'
+        )
 
     @extend_schema(
         operation_id='profile_me_retrieve',
@@ -65,7 +74,7 @@ class CurrentUserProfileView(RetrieveUpdateAPIView):
         return super().patch(request, *args, **kwargs)
 
     def get_object(self):
-        return self.request.user
+        return self.get_queryset().get(pk=self.request.user.pk)
 
     def perform_update(self, serializer):
         serializer.save()
@@ -73,7 +82,7 @@ class CurrentUserProfileView(RetrieveUpdateAPIView):
 
 
 class PublicUserProfileView(RetrieveAPIView):
-    serializer_class = UserProfileSerializer
+    serializer_class = PublicUserProfileSerializer
     permission_classes = [permissions.AllowAny]
     authentication_classes = []
 
@@ -82,21 +91,23 @@ class PublicUserProfileView(RetrieveAPIView):
         summary='Public profile by id',
         description='Return the public profile for a user id.',
         tags=['User Profiles'],
-        responses={200: UserProfileSerializer, 404: OpenApiTypes.OBJECT},
+        responses={200: PublicUserProfileSerializer, 404: OpenApiTypes.OBJECT},
     )
     def get(self, request, *args, **kwargs):
         logger.info("GET /api/profile/%s/", kwargs.get('pk'))
         return super().get(request, *args, **kwargs)
 
     def get_object(self):
-        queryset = User.objects.select_related('reader_profile', 'author_profile')
+        queryset = User.objects.select_related('reader_profile', 'author_profile').prefetch_related(
+            'reader_profile__preferred_genres'
+        )
         obj = get_object_or_404(queryset, pk=self.kwargs['pk'])
         self.check_object_permissions(self.request, obj)
         return obj
 
 
 class UserByUsernameProfileView(RetrieveAPIView):
-    serializer_class = UserProfileSerializer
+    serializer_class = PublicUserProfileSerializer
     permission_classes = [permissions.AllowAny]
     authentication_classes = []
 
@@ -105,14 +116,16 @@ class UserByUsernameProfileView(RetrieveAPIView):
         summary='Public profile by username',
         description='Return the public profile for a username.',
         tags=['User Profiles'],
-        responses={200: UserProfileSerializer, 404: OpenApiTypes.OBJECT},
+        responses={200: PublicUserProfileSerializer, 404: OpenApiTypes.OBJECT},
     )
     def get(self, request, *args, **kwargs):
         logger.info("GET /api/profile/username/%s/", kwargs.get('username'))
         return super().get(request, *args, **kwargs)
 
     def get_object(self):
-        queryset = User.objects.select_related('reader_profile', 'author_profile')
+        queryset = User.objects.select_related('reader_profile', 'author_profile').prefetch_related(
+            'reader_profile__preferred_genres'
+        )
         obj = get_object_or_404(queryset, username=self.kwargs['username'])
         self.check_object_permissions(self.request, obj)
         return obj

@@ -1,11 +1,18 @@
-"""Сериализаторы для книг и жанров."""
-from rest_framework import serializers
+"""Serializers for books and genres."""
+from pathlib import Path
+
+from django.utils.text import slugify
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
+from rest_framework import serializers
 
 from core.books.models import Book, Genre
 from core.profiles.models import AuthorProfile
 from core.profiles.serializers import AuthorProfileSerializer
+
+
+ALLOWED_COVER_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
+ALLOWED_BOOK_FILE_EXTENSIONS = {'.pdf', '.epub', '.fb2', '.txt'}
 
 
 class GenreSerializer(serializers.ModelSerializer):
@@ -14,12 +21,22 @@ class GenreSerializer(serializers.ModelSerializer):
     class Meta:
         model = Genre
         fields = ['id', 'name', 'slug', 'description', 'created_at', 'books_count']
-        read_only_fields = ['id', 'slug', 'created_at']
+        read_only_fields = ['id', 'created_at', 'books_count']
         ref_name = 'Genre'
 
     @extend_schema_field(OpenApiTypes.INT)
     def get_books_count(self, obj):
         return obj.books.filter(status='published', is_active=True).count()
+
+    def validate_slug(self, value):
+        return validate_unique_slug(Genre, value, self.instance)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        slug_candidate = attrs.get('slug') or attrs.get('name')
+        if slug_candidate:
+            validate_unique_slug(Genre, slug_candidate, self.instance)
+        return attrs
 
 
 class GenreSimpleSerializer(serializers.ModelSerializer):
@@ -128,7 +145,6 @@ class BookCreateUpdateSerializer(serializers.ModelSerializer):
         required=False,
         write_only=True,
         source='authors',
-        help_text='ID авторов (профилей)',
     )
     genre_ids = serializers.PrimaryKeyRelatedField(
         queryset=Genre.objects.all(),
@@ -136,7 +152,6 @@ class BookCreateUpdateSerializer(serializers.ModelSerializer):
         required=False,
         write_only=True,
         source='genres',
-        help_text='ID жанров',
     )
 
     class Meta:
@@ -188,12 +203,81 @@ class BookCreateUpdateSerializer(serializers.ModelSerializer):
 
         return instance
 
+    def validate_slug(self, value):
+        return validate_unique_slug(Book, value, self.instance)
+
+    def validate_cover(self, value):
+        validate_uploaded_extension(value, ALLOWED_COVER_EXTENSIONS, 'cover')
+        return value
+
+    def validate_file(self, value):
+        validate_uploaded_extension(value, ALLOWED_BOOK_FILE_EXTENSIONS, 'file')
+        return value
+
     def validate_price(self, value):
         if value < 0:
-            raise serializers.ValidationError('Цена не может быть отрицательной')
+            raise serializers.ValidationError('Price cannot be negative.')
         return value
 
     def validate_pages(self, value):
         if value < 0:
-            raise serializers.ValidationError('Количество страниц не может быть отрицательным')
+            raise serializers.ValidationError('Pages cannot be negative.')
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context['request']
+        try:
+            current_author = request.user.author_profile
+        except Exception:
+            current_author = None
+        authors = attrs.get('authors')
+        slug_candidate = attrs.get('slug') or attrs.get('title')
+
+        if slug_candidate:
+            validate_unique_slug(Book, slug_candidate, self.instance)
+
+        if authors is not None and current_author and not is_staff_or_moderator(request.user):
+            if current_author not in authors:
+                raise serializers.ValidationError(
+                    {'author_ids': 'Current author must remain attached to the book.'}
+                )
+
+        if attrs.get('is_free') and attrs.get('price', getattr(self.instance, 'price', 0)) not in (0, 0.0):
+            raise serializers.ValidationError({'price': 'Free books must have price 0.'})
+
+        return attrs
+
+
+def validate_unique_slug(model_class, value, instance=None):
+    if not value:
+        return value
+
+    normalized = slugify(value)
+    if not normalized:
+        raise serializers.ValidationError('Slug is invalid.')
+
+    queryset = model_class.objects.filter(slug=normalized)
+    if instance is not None:
+        queryset = queryset.exclude(pk=instance.pk)
+
+    if queryset.exists():
+        raise serializers.ValidationError('Slug must be unique.')
+
+    return normalized
+
+
+def validate_uploaded_extension(value, allowed_extensions, field_name):
+    extension = Path(value.name).suffix.lower()
+    if extension not in allowed_extensions:
+        raise serializers.ValidationError(
+            f'Unsupported {field_name} format. Allowed: {", ".join(sorted(allowed_extensions))}.'
+        )
+
+
+def is_staff_or_moderator(user):
+    return (
+        user.is_staff
+        or user.is_superuser
+        or getattr(user, 'role', None) in {'moderator', 'admin'}
+    )

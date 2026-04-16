@@ -4,7 +4,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 
-from core.auth_.validators import is_valid_email_format
+from core.auth_.validators import email_domain_exists, is_valid_email_format
 
 User = get_user_model()
 
@@ -40,6 +40,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"email": "User with this email already exists."})
         if not is_valid_email_format(attrs['email']):
             raise serializers.ValidationError({"email": "Email format is invalid"})
+        if not email_domain_exists(attrs['email']):
+            raise serializers.ValidationError({"email": "Email domain does not exist or is unreachable."})
 
         return attrs
 
