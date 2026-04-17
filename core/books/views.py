@@ -17,7 +17,7 @@ from rest_framework.generics import (
 from rest_framework.response import Response
 
 from core.books.models import Book, Genre
-from core.books.permissions import CanViewBook, IsApprovedAuthor, IsBookAuthorOrStaff, IsModeratorOrStaff
+from core.books.permissions import CanViewBook, HasAuthorProfile, IsApprovedAuthor, IsBookAuthorOrStaff, IsModeratorOrStaff
 from core.books.serializers import (
     BookCreateUpdateSerializer,
     BookDetailSerializer,
@@ -46,7 +46,7 @@ class GenreListCreateView(ListCreateAPIView):
         summary='List genres',
         description='Returns all genres.',
         tags=['Genres'],
-        responses={200: GenreSerializer},
+        responses={200: GenreSerializer(many=True)},
     )
     def get(self, request, *args, **kwargs):
         logger.info("GET /api/books/genres/")
@@ -176,9 +176,13 @@ class BookListView(ListAPIView):
             OpenApiParameter(name='genres', required=False, type=str),
             OpenApiParameter(name='authors', required=False, type=str),
             OpenApiParameter(name='is_free', required=False, type=bool),
+            OpenApiParameter(name='price__lte', required=False, type=str),
+            OpenApiParameter(name='price__gte', required=False, type=str),
+            OpenApiParameter(name='pages__lte', required=False, type=str),
+            OpenApiParameter(name='pages__gte', required=False, type=str),
             OpenApiParameter(name='ordering', required=False, type=str),
         ],
-        responses={200: BookListSerializer},
+        responses={200: BookListSerializer(many=True)},
     )
     def get(self, request, *args, **kwargs):
         logger.info("GET /api/books/")
@@ -244,6 +248,15 @@ class BookCreateView(CreateAPIView):
         logger.info("POST /api/books/create/ by user %s", request.user.username)
         return super().post(request, *args, **kwargs)
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        book = serializer.instance
+        output = BookDetailSerializer(book, context=self.get_serializer_context())
+        headers = self.get_success_headers(output.data)
+        return Response(output.data, status=201, headers=headers)
+
     def perform_create(self, serializer):
         author_profile = self.request.user.author_profile
         book = serializer.save()
@@ -270,9 +283,26 @@ class BookUpdateView(UpdateAPIView):
         logger.info("PUT /api/books/%s/update/", kwargs.get('pk'))
         return super().put(request, *args, **kwargs)
 
+    @extend_schema(
+        operation_id='books_book_partial_update',
+        summary='Partially update book',
+        description='Partially update a book. Only the book author, moderator, or staff can update the book.',
+        tags=['Books'],
+        request=BookCreateUpdateSerializer,
+        responses={200: BookDetailSerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
     def patch(self, request, *args, **kwargs):
         logger.info("PATCH /api/books/%s/update/", kwargs.get('pk'))
         return super().patch(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        output = BookDetailSerializer(serializer.instance, context=self.get_serializer_context())
+        return Response(output.data)
 
 
 class BookDeleteView(DestroyAPIView):
@@ -295,7 +325,7 @@ class BookDeleteView(DestroyAPIView):
 
 class MyBooksView(ListAPIView):
     serializer_class = BookListSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, HasAuthorProfile]
 
     def get_queryset(self):
         try:
@@ -312,7 +342,7 @@ class MyBooksView(ListAPIView):
         summary='My books',
         description='List all books created by the current author.',
         tags=['Books'],
-        responses={200: BookListSerializer},
+        responses={200: BookListSerializer(many=True)},
     )
     def get(self, request, *args, **kwargs):
         logger.info("GET /api/books/my/")

@@ -1,6 +1,9 @@
 """
 Serializers for user profiles.
 """
+from pathlib import Path
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
@@ -9,6 +12,7 @@ from core.profiles.models import AuthorProfile, ReaderProfile
 
 
 User = get_user_model()
+ALLOWED_AVATAR_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 
 
 class ReaderPreferredGenreSerializer(serializers.ModelSerializer):
@@ -45,6 +49,20 @@ class ReaderProfileSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['user', 'books_read', 'reviews_written', 'created_at', 'updated_at']
         ref_name = 'ReaderProfile'
+
+    def validate_avatar(self, value):
+        extension = Path(value.name).suffix.lower()
+        if extension not in ALLOWED_AVATAR_EXTENSIONS:
+            raise serializers.ValidationError(
+                f'Unsupported avatar format. Allowed: {", ".join(sorted(ALLOWED_AVATAR_EXTENSIONS))}.'
+            )
+
+        if value.size > settings.MAX_AVATAR_UPLOAD_SIZE:
+            raise serializers.ValidationError(
+                f'Avatar is too large. Maximum size is {settings.MAX_AVATAR_UPLOAD_SIZE // (1024 * 1024)} MB.'
+            )
+
+        return value
 
 
 class AuthorProfileSerializer(serializers.ModelSerializer):
@@ -125,6 +143,12 @@ class UserProfileSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'username', 'role', 'is_author', 'email_confirmed', 'telegram_confirmed']
         ref_name = 'UserProfile'
+
+    def validate_email(self, value):
+        queryset = User.objects.filter(email=value).exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError('User with this email already exists.')
+        return value
 
     def update(self, instance, validated_data):
         reader_profile_data = validated_data.pop('reader_profile', None)

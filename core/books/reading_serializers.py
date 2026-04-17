@@ -1,9 +1,13 @@
 """Serializers for bookmarks, reading history, reviews, and author requests."""
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from core.books.models import BookStatus
+from core.books.permissions import is_moderator_or_staff
+from core.books.serializers import BookDetailSerializer
 from core.profiles.models import AuthorProfile, Bookmark, ReadingHistory, Review
 
 
@@ -38,13 +42,16 @@ class BookmarkSerializer(serializers.ModelSerializer):
         attrs = super().validate(attrs)
         book = attrs.get('book') or getattr(self.instance, 'book', None)
         page_number = attrs.get('page_number') or getattr(self.instance, 'page_number', None)
+        request = self.context['request']
 
         if book and page_number and book.pages > 0 and page_number > book.pages:
             raise serializers.ValidationError(
                 {'page_number': f'Page number cannot exceed the total book pages ({book.pages}).'}
             )
 
-        reader = self.context['request'].user.reader_profile
+        ensure_reader_book_access(request.user, book, require_read_access=True)
+
+        reader = request.user.reader_profile
         if book and page_number:
             queryset = Bookmark.objects.filter(reader=reader, book=book, page_number=page_number)
             if self.instance is not None:
@@ -59,7 +66,13 @@ class BookmarkSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data['reader'] = self.context['request'].user.reader_profile
-        return super().create(validated_data)
+        try:
+            with transaction.atomic():
+                return super().create(validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError(
+                {'page_number': 'A bookmark for this page already exists.'}
+            )
 
 
 class ReadingHistorySerializer(serializers.ModelSerializer):
@@ -112,14 +125,17 @@ class ReadingHistorySerializer(serializers.ModelSerializer):
         attrs = super().validate(attrs)
         book = attrs.get('book') or getattr(self.instance, 'book', None)
         last_page_read = attrs.get('last_page_read')
+        request = self.context['request']
 
         if book and last_page_read is not None and book.pages > 0 and last_page_read > book.pages:
             raise serializers.ValidationError(
                 {'last_page_read': f'Last page read cannot exceed the total book pages ({book.pages}).'}
             )
 
+        ensure_reader_book_access(request.user, book, require_read_access=True)
+
         if self.instance is None and book and not self.context.get('allow_existing_history', False):
-            reader = self.context['request'].user.reader_profile
+            reader = request.user.reader_profile
             if ReadingHistory.objects.filter(reader=reader, book=book).exists():
                 raise serializers.ValidationError({'book': 'Reading history for this book already exists.'})
 
@@ -127,7 +143,11 @@ class ReadingHistorySerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data['reader'] = self.context['request'].user.reader_profile
-        history = super().create(validated_data)
+        try:
+            with transaction.atomic():
+                history = super().create(validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError({'book': 'Reading history for this book already exists.'})
         if history.last_page_read:
             total_pages = history.book.pages if history.book and history.book.pages > 0 else 1
             history.update_progress(history.last_page_read, total_pages)
@@ -191,8 +211,11 @@ class ReviewCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        reader = self.context['request'].user.reader_profile
+        request = self.context['request']
+        reader = request.user.reader_profile
         book = attrs.get('book')
+
+        ensure_reader_book_access(request.user, book, require_read_access=False)
 
         queryset = Review.objects.filter(reader=reader, book=book)
         if self.instance is not None:
@@ -206,7 +229,11 @@ class ReviewCreateSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data['reader'] = self.context['request'].user.reader_profile
         validated_data['is_verified_purchase'] = False
-        review = super().create(validated_data)
+        try:
+            with transaction.atomic():
+                review = super().create(validated_data)
+        except IntegrityError:
+            raise serializers.ValidationError({'book': 'You have already reviewed this book.'})
         reader = review.reader
         reader.reviews_written = Review.objects.filter(reader=reader).count()
         reader.save(update_fields=['reviews_written'])
@@ -247,3 +274,42 @@ class AuthorRequestCreateSerializer(serializers.ModelSerializer):
 class AuthorRequestModerationSerializer(serializers.Serializer):
     approve = serializers.BooleanField()
     rejection_reason = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+
+
+class BookReadResponseSerializer(serializers.Serializer):
+    book = BookDetailSerializer()
+    reading_history = ReadingHistorySerializer()
+
+
+class BookProgressResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField()
+    history_id = serializers.UUIDField()
+    last_page_read = serializers.IntegerField()
+    progress_percentage = serializers.IntegerField()
+    is_completed = serializers.BooleanField()
+
+
+class HelpfulReviewResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField()
+    helpful_count = serializers.IntegerField()
+
+
+class AuthorRequestModerationResultSerializer(serializers.Serializer):
+    message = serializers.CharField()
+    approved_at = serializers.DateTimeField(required=False)
+    author_profile_id = serializers.CharField(required=False)
+    reason = serializers.CharField(required=False)
+
+
+def ensure_reader_book_access(user, book, require_read_access):
+    if book is None:
+        raise serializers.ValidationError({'book': 'Book is required.'})
+
+    if is_moderator_or_staff(user) or book.authors.filter(user=user).exists():
+        return
+
+    if book.status != BookStatus.PUBLISHED or not book.is_active:
+        raise serializers.ValidationError({'book': 'Book is not available.'})
+
+    if require_read_access and not book.can_read(user):
+        raise serializers.ValidationError({'book': 'You do not have access to this book.'})

@@ -2,6 +2,7 @@ import os
 import shutil
 
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
@@ -102,6 +103,7 @@ class ReadingAPITests(APITestCase):
         response = self.client.get(reverse('reading:book-read', kwargs={'slug': self.paid_book.slug}))
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data['type'], 'permission_denied')
 
     def test_book_download_returns_file_and_updates_counter(self):
         self.client.force_authenticate(user=self.reader_user)
@@ -160,7 +162,8 @@ class ReadingAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('page_number', response.data)
+        self.assertEqual(response.data['type'], 'validation_error')
+        self.assertIn('page_number', response.data['errors'])
 
     def test_reading_history_routes_create_list_update(self):
         self.client.force_authenticate(user=self.reader_user)
@@ -192,6 +195,26 @@ class ReadingAPITests(APITestCase):
         self.assertEqual(update_response.status_code, status.HTTP_200_OK)
         history = ReadingHistory.objects.get(pk=history_id)
         self.assertTrue(history.is_completed)
+
+    def test_reading_progress_can_reset_completion_and_books_read(self):
+        self.client.force_authenticate(user=self.reader_user)
+
+        self.client.post(
+            reverse('reading:book-progress', kwargs={'slug': self.book.slug}),
+            {'current_page': 10},
+            format='json',
+        )
+        downgrade_response = self.client.post(
+            reverse('reading:book-progress', kwargs={'slug': self.book.slug}),
+            {'current_page': 5},
+            format='json',
+        )
+
+        self.assertEqual(downgrade_response.status_code, status.HTTP_200_OK)
+        history = ReadingHistory.objects.get(reader=self.reader_user.reader_profile, book=self.book)
+        self.assertFalse(history.is_completed)
+        self.reader_user.reader_profile.refresh_from_db()
+        self.assertEqual(self.reader_user.reader_profile.books_read, 0)
 
     def test_review_routes_create_list_detail_helpful_delete(self):
         self.client.force_authenticate(user=self.reader_user)
@@ -241,7 +264,16 @@ class ReadingAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('book', response.data)
+        self.assertEqual(response.data['type'], 'validation_error')
+        self.assertIn('book', response.data['errors'])
+
+    def test_review_detail_not_found_uses_error_envelope(self):
+        self.client.force_authenticate(user=self.reader_user)
+
+        response = self.client.get(reverse('reading:review-detail', kwargs={'pk': '00000000-0000-0000-0000-000000000000'}))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.data['type'], 'not_found')
 
     def test_author_request_flow_for_moderator(self):
         self.client.force_authenticate(user=self.pending_author_user)
@@ -268,3 +300,24 @@ class ReadingAPITests(APITestCase):
         self.pending_author_user.refresh_from_db()
         self.assertTrue(self.pending_author_user.is_author)
         self.assertEqual(self.pending_author_user.role, 'author')
+
+    def test_bookmark_unique_constraint_blocks_duplicate_rows(self):
+        Bookmark.objects.create(reader=self.reader_user.reader_profile, book=self.book, page_number=7)
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Bookmark.objects.create(reader=self.reader_user.reader_profile, book=self.book, page_number=7)
+
+    def test_reading_history_unique_constraint_blocks_duplicate_rows(self):
+        ReadingHistory.objects.create(reader=self.reader_user.reader_profile, book=self.book)
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ReadingHistory.objects.create(reader=self.reader_user.reader_profile, book=self.book)
+
+    def test_review_unique_constraint_blocks_duplicate_rows(self):
+        Review.objects.create(reader=self.reader_user.reader_profile, book=self.book, rating=4, text='First')
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Review.objects.create(reader=self.reader_user.reader_profile, book=self.book, rating=5, text='Second')

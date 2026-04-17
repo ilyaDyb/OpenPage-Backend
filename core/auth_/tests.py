@@ -1,8 +1,12 @@
+import os
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
+from core.auth_.models import QRAuthRequest
 from core.auth_.serializers import UserCreateSerializer
 
 
@@ -54,11 +58,50 @@ class RegisterViewTests(TestCase):
         response = self.client.post(self.url, self.payload, format="json")
 
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["type"], "validation_error")
         self.assertEqual(
-            response.json()["detail"],
+            response.json()["errors"]["email"][0],
             "Failed to send verification code to this email."
         )
         mocked_send_email.assert_called_once()
         mocked_get_registration_data.assert_called_once_with(self.payload["email"])
         mocked_store_registration_data.assert_not_called()
         mocked_email_domain_exists.assert_called_once_with(self.payload["email"])
+
+
+@override_settings(ROOT_URLCONF="core.open_page.urls")
+class QRAuthSecurityTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.qr_request = QRAuthRequest.objects.create(expires_at=timezone.now() + timedelta(minutes=5))
+
+    @patch.dict(os.environ, {"API_SECRET_KEY": "super-secret"}, clear=False)
+    def test_qr_confirm_requires_secret_key(self):
+        response = self.client.post(
+            "/api/qr-auth/confirm/",
+            {
+                "token": str(self.qr_request.token),
+                "telegram_id": 123456,
+                "telegram_username": "readerbot",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["type"], "permission_denied")
+
+    @patch.dict(os.environ, {"API_SECRET_KEY": "super-secret"}, clear=False)
+    def test_qr_confirm_accepts_valid_secret_key(self):
+        response = self.client.post(
+            "/api/qr-auth/confirm/",
+            {
+                "token": str(self.qr_request.token),
+                "telegram_id": 123456,
+                "telegram_username": "readerbot",
+            },
+            format="json",
+            HTTP_X_SECRET_KEY="super-secret",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])

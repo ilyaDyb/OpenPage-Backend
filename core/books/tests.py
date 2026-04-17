@@ -118,6 +118,8 @@ class BookAPITests(APITestCase):
         )
         self.book.authors.add(self.author_profile)
         self.book.genres.add(self.genre)
+        self.book.file = SimpleUploadedFile('published-book.pdf', b'%PDF-1.4 test', content_type='application/pdf')
+        self.book.save(update_fields=['file'])
         self.draft_book = Book.objects.create(
             title='Draft Book',
             description='Hidden draft',
@@ -130,6 +132,7 @@ class BookAPITests(APITestCase):
     def test_book_list_requires_authentication(self):
         response = self.client.get(reverse('books:book-list'))
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.data['type'], 'authentication_error')
 
     def test_book_list_returns_only_published_books(self):
         self.client.force_authenticate(user=self.reader_user)
@@ -149,6 +152,7 @@ class BookAPITests(APITestCase):
         self.client.force_authenticate(user=self.reader_user)
         response = self.client.get(reverse('books:book-detail', kwargs={'pk': self.draft_book.pk}))
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data['type'], 'permission_denied')
 
     def test_author_can_view_own_draft_book(self):
         self.client.force_authenticate(user=self.author_user)
@@ -160,6 +164,14 @@ class BookAPITests(APITestCase):
         response = self.client.get(reverse('books:book-by-slug', kwargs={'slug': self.book.slug}))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['id'], str(self.book.id))
+        self.assertIsNone(response.data['file_url'])
+        self.assertIsNotNone(response.data['download_url'])
+
+    def test_book_read_endpoint_returns_file_url_after_access_check(self):
+        self.client.force_authenticate(user=self.reader_user)
+        response = self.client.get(reverse('reading:book-read', kwargs={'slug': self.book.slug}))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(response.data['book']['file_url'])
 
     def test_book_create_requires_approved_author_profile(self):
         self.client.force_authenticate(user=self.unapproved_author_user)
@@ -233,8 +245,9 @@ class BookAPITests(APITestCase):
             format='multipart',
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('cover', response.data)
-        self.assertIn('file', response.data)
+        self.assertEqual(response.data['type'], 'validation_error')
+        self.assertIn('cover', response.data['errors'])
+        self.assertIn('file', response.data['errors'])
 
     def test_book_create_validates_unique_slug(self):
         self.client.force_authenticate(user=self.author_user)
@@ -251,7 +264,26 @@ class BookAPITests(APITestCase):
             format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('slug', response.data)
+        self.assertEqual(response.data['type'], 'validation_error')
+        self.assertIn('slug', response.data['errors'])
+
+    def test_book_create_requires_file_for_published_book(self):
+        self.client.force_authenticate(user=self.author_user)
+        response = self.client.post(
+            reverse('books:book-create'),
+            {
+                'title': 'Published without file',
+                'pages': 20,
+                'status': BookStatus.PUBLISHED,
+                'is_free': True,
+                'price': '0.00',
+                'is_free_to_read': True,
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['type'], 'validation_error')
+        self.assertIn('file', response.data['errors'])
 
     def test_genre_list_is_available_for_authenticated_user(self):
         self.client.force_authenticate(user=self.reader_user)
@@ -267,6 +299,7 @@ class BookAPITests(APITestCase):
             format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data['type'], 'permission_denied')
 
     def test_genre_crud_works_for_moderator(self):
         self.client.force_authenticate(user=self.moderator_user)
@@ -295,3 +328,44 @@ class BookAPITests(APITestCase):
         response = self.client.get(reverse('books:my-books'))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data), 2)
+
+    def test_my_books_requires_author_profile(self):
+        self.client.force_authenticate(user=self.reader_user)
+        response = self.client.get(reverse('books:my-books'))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.data['type'], 'permission_denied')
+
+    def test_bookmark_create_rejects_unavailable_book(self):
+        self.client.force_authenticate(user=self.reader_user)
+        response = self.client.post(
+            reverse('reading:bookmark-create'),
+            {
+                'book': str(self.draft_book.pk),
+                'page_number': 1,
+                'note': 'Hidden draft note',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['type'], 'validation_error')
+        self.assertIn('book', response.data['errors'])
+
+    def test_book_create_rejects_oversized_file(self):
+        self.client.force_authenticate(user=self.author_user)
+        with self.settings(MAX_BOOK_UPLOAD_SIZE=4):
+            response = self.client.post(
+                reverse('books:book-create'),
+                {
+                    'title': 'Too big book',
+                    'pages': 20,
+                    'status': BookStatus.DRAFT,
+                    'is_free': True,
+                    'price': '0.00',
+                    'file': SimpleUploadedFile('book.pdf', b'12345', content_type='application/pdf'),
+                },
+                format='multipart',
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['type'], 'validation_error')
+        self.assertIn('file', response.data['errors'])

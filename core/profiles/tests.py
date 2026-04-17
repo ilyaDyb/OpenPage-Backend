@@ -89,6 +89,7 @@ class ProfileAPITests(APITestCase):
         response = self.client.get(reverse('profiles:current-user-profile'))
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.data['type'], 'authentication_error')
 
     def test_get_current_user_profile_returns_nested_profiles(self):
         self.client.force_authenticate(user=self.user)
@@ -169,13 +170,13 @@ class ProfileAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['username'], self.other_user.username)
 
-    def test_create_reader_profile_returns_conflict_when_profile_exists(self):
+    def test_create_reader_profile_returns_existing_profile(self):
         self.client.force_authenticate(user=self.user)
 
         response = self.client.post(reverse('profiles:reader-profile'))
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('error', response.data)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['username'], self.user.username)
 
     def test_new_user_already_has_reader_profile(self):
         self.assertTrue(hasattr(self.other_user, 'reader_profile'))
@@ -210,7 +211,21 @@ class ProfileAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('website', response.data)
+        self.assertEqual(response.data['type'], 'validation_error')
+        self.assertIn('website', response.data['errors'])
+
+    def test_patch_current_user_profile_rejects_duplicate_email(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.patch(
+            reverse('profiles:current-user-profile'),
+            {'email': self.other_user.email},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['type'], 'validation_error')
+        self.assertIn('email', response.data['errors'])
 
 
 class ProfileSchemaTests(SimpleTestCase):

@@ -1,6 +1,7 @@
 """API for reading and downloading books."""
 import logging
 
+from django.db import IntegrityError
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
@@ -10,8 +11,9 @@ from rest_framework.generics import RetrieveAPIView
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.api_errors import error_response
 from core.books.permissions import IsReader, is_moderator_or_staff
-from core.books.reading_serializers import ReadingHistorySerializer
+from core.books.reading_serializers import BookProgressResponseSerializer, BookReadResponseSerializer, ReadingHistorySerializer
 from core.books.serializers import BookDetailSerializer
 from core.books.models import Book
 from core.profiles.models import ReadingHistory
@@ -27,10 +29,11 @@ class BookReadView(RetrieveAPIView):
     lookup_field = 'slug'
 
     @extend_schema(
+        operation_id='reading_book_read',
         summary='Read book',
         description='Return book data for reading and create reading history if needed.',
         tags=['Book Reading'],
-        responses={200: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+        responses={200: BookReadResponseSerializer, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
     )
     def get(self, request, *args, **kwargs):
         slug = kwargs.get('slug')
@@ -38,17 +41,24 @@ class BookReadView(RetrieveAPIView):
 
         book = self.get_object()
         if not can_user_read_book(request.user, book):
-            return Response({'detail': 'You do not have access to read this book.'}, status=status.HTTP_403_FORBIDDEN)
+            return error_response(
+                error_type='permission_denied',
+                detail='You do not have access to read this book.',
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
 
         book.update_views()
-        history, _ = ReadingHistory.objects.get_or_create(
-            reader=request.user.reader_profile,
-            book=book,
-        )
+        try:
+            history, _ = ReadingHistory.objects.get_or_create(
+                reader=request.user.reader_profile,
+                book=book,
+            )
+        except IntegrityError:
+            history = ReadingHistory.objects.get(reader=request.user.reader_profile, book=book)
 
         return Response(
             {
-                'book': self.get_serializer(book).data,
+                'book': self.get_serializer(book, context={**self.get_serializer_context(), 'include_file_url': True}).data,
                 'reading_history': ReadingHistorySerializer(history, context={'request': request}).data,
             }
         )
@@ -58,6 +68,7 @@ class BookDownloadView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsReader]
 
     @extend_schema(
+        operation_id='reading_book_download',
         summary='Download book',
         description='Download the file of a book if downloading is allowed.',
         tags=['Book Reading'],
@@ -68,10 +79,18 @@ class BookDownloadView(APIView):
         book = get_object_or_404(Book, slug=slug)
 
         if not can_user_download_book(request.user, book):
-            return Response({'detail': 'You do not have access to download this book.'}, status=status.HTTP_403_FORBIDDEN)
+            return error_response(
+                error_type='permission_denied',
+                detail='You do not have access to download this book.',
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
 
         if not book.file:
-            return Response({'detail': 'Book file is missing.'}, status=status.HTTP_404_NOT_FOUND)
+            return error_response(
+                error_type='not_found',
+                detail='Book file is missing.',
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
 
         book.update_downloads()
         filename = book.file.name.rsplit('/', 1)[-1]
@@ -84,35 +103,57 @@ class BookProgressView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsReader]
 
     @extend_schema(
+        operation_id='reading_book_progress',
         summary='Update reading progress',
         description='Submit current page and update reading progress for the book.',
         tags=['Book Reading'],
         request=OpenApiTypes.OBJECT,
-        responses={200: OpenApiTypes.OBJECT, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+        responses={200: BookProgressResponseSerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
     )
     def post(self, request, slug):
         logger.info("POST /api/reading/books/%s/progress/ for user %s", slug, request.user.username)
         book = get_object_or_404(Book, slug=slug)
 
         if not can_user_read_book(request.user, book):
-            return Response({'detail': 'You do not have access to read this book.'}, status=status.HTTP_403_FORBIDDEN)
+            return error_response(
+                error_type='permission_denied',
+                detail='You do not have access to read this book.',
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
 
         current_page = request.data.get('current_page')
         if current_page is None:
-            return Response({'detail': 'current_page is required.'}, status=status.HTTP_400_BAD_REQUEST)
+            return error_response(
+                error_type='validation_error',
+                detail='Validation failed.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                errors={'current_page': ['This field is required.']},
+            )
 
         try:
             current_page = int(current_page)
         except (TypeError, ValueError):
-            return Response({'detail': 'current_page must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
+            return error_response(
+                error_type='validation_error',
+                detail='Validation failed.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                errors={'current_page': ['current_page must be an integer.']},
+            )
 
         if current_page < 0:
-            return Response({'detail': 'current_page cannot be negative.'}, status=status.HTTP_400_BAD_REQUEST)
+            return error_response(
+                error_type='validation_error',
+                detail='Validation failed.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                errors={'current_page': ['current_page cannot be negative.']},
+            )
 
         if book.pages > 0 and current_page > book.pages:
-            return Response(
-                {'detail': f'current_page cannot exceed the total book pages ({book.pages}).'},
-                status=status.HTTP_400_BAD_REQUEST,
+            return error_response(
+                error_type='validation_error',
+                detail='Validation failed.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                errors={'current_page': [f'current_page cannot exceed the total book pages ({book.pages}).']},
             )
 
         history, _ = ReadingHistory.objects.get_or_create(

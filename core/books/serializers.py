@@ -1,12 +1,15 @@
 """Serializers for books and genres."""
 from pathlib import Path
 
+from django.conf import settings
+from django.urls import reverse
 from django.utils.text import slugify
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from core.books.models import Book, Genre
+from core.books.models import Book, BookStatus, Genre
+from core.books.permissions import is_moderator_or_staff
 from core.profiles.models import AuthorProfile
 from core.profiles.serializers import AuthorProfileSerializer
 
@@ -51,6 +54,8 @@ class BookListSerializer(serializers.ModelSerializer):
     authors = serializers.StringRelatedField(many=True, read_only=True)
     genres = GenreSimpleSerializer(many=True, read_only=True)
     cover_url = serializers.SerializerMethodField()
+    read_url = serializers.SerializerMethodField()
+    download_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Book
@@ -61,6 +66,8 @@ class BookListSerializer(serializers.ModelSerializer):
             'authors',
             'genres',
             'cover_url',
+            'read_url',
+            'download_url',
             'price',
             'is_free',
             'is_free_to_read',
@@ -83,12 +90,34 @@ class BookListSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         return request.build_absolute_uri(obj.cover.url) if request else obj.cover.url
 
+    @extend_schema_field(OpenApiTypes.URI)
+    def get_read_url(self, obj):
+        request = self.context.get('request')
+        return build_book_action_url(
+            request,
+            'reading:book-read',
+            obj.slug,
+            can_access=can_user_read_book(request, obj),
+        )
+
+    @extend_schema_field(OpenApiTypes.URI)
+    def get_download_url(self, obj):
+        request = self.context.get('request')
+        return build_book_action_url(
+            request,
+            'reading:book-download',
+            obj.slug,
+            can_access=can_user_download_file(request, obj),
+        )
+
 
 class BookDetailSerializer(serializers.ModelSerializer):
     authors = AuthorProfileSerializer(many=True, read_only=True)
     genres = GenreSimpleSerializer(many=True, read_only=True)
     cover_url = serializers.SerializerMethodField()
     file_url = serializers.SerializerMethodField()
+    read_url = serializers.SerializerMethodField()
+    download_url = serializers.SerializerMethodField()
     authors_list = serializers.CharField(read_only=True)
     display_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
 
@@ -104,6 +133,8 @@ class BookDetailSerializer(serializers.ModelSerializer):
             'description',
             'cover_url',
             'file_url',
+            'read_url',
+            'download_url',
             'price',
             'is_free',
             'is_free_to_read',
@@ -134,8 +165,32 @@ class BookDetailSerializer(serializers.ModelSerializer):
         if not obj.file:
             return None
 
+        include_file_url = self.context.get('include_file_url', False)
+        if not include_file_url:
+            return None
+
         request = self.context.get('request')
         return request.build_absolute_uri(obj.file.url) if request else obj.file.url
+
+    @extend_schema_field(OpenApiTypes.URI)
+    def get_read_url(self, obj):
+        request = self.context.get('request')
+        return build_book_action_url(
+            request,
+            'reading:book-read',
+            obj.slug,
+            can_access=can_user_read_book(request, obj),
+        )
+
+    @extend_schema_field(OpenApiTypes.URI)
+    def get_download_url(self, obj):
+        request = self.context.get('request')
+        return build_book_action_url(
+            request,
+            'reading:book-download',
+            obj.slug,
+            can_access=can_user_download_file(request, obj),
+        )
 
 
 class BookCreateUpdateSerializer(serializers.ModelSerializer):
@@ -208,10 +263,12 @@ class BookCreateUpdateSerializer(serializers.ModelSerializer):
 
     def validate_cover(self, value):
         validate_uploaded_extension(value, ALLOWED_COVER_EXTENSIONS, 'cover')
+        validate_uploaded_size(value, settings.MAX_COVER_UPLOAD_SIZE, 'cover')
         return value
 
     def validate_file(self, value):
         validate_uploaded_extension(value, ALLOWED_BOOK_FILE_EXTENSIONS, 'file')
+        validate_uploaded_size(value, settings.MAX_BOOK_UPLOAD_SIZE, 'file')
         return value
 
     def validate_price(self, value):
@@ -233,6 +290,9 @@ class BookCreateUpdateSerializer(serializers.ModelSerializer):
             current_author = None
         authors = attrs.get('authors')
         slug_candidate = attrs.get('slug') or attrs.get('title')
+        book_file = attrs.get('file', getattr(self.instance, 'file', None))
+        allow_download = attrs.get('allow_download', getattr(self.instance, 'allow_download', False))
+        status_value = attrs.get('status', getattr(self.instance, 'status', None))
 
         if slug_candidate:
             validate_unique_slug(Book, slug_candidate, self.instance)
@@ -245,6 +305,12 @@ class BookCreateUpdateSerializer(serializers.ModelSerializer):
 
         if attrs.get('is_free') and attrs.get('price', getattr(self.instance, 'price', 0)) not in (0, 0.0):
             raise serializers.ValidationError({'price': 'Free books must have price 0.'})
+
+        if allow_download and not book_file:
+            raise serializers.ValidationError({'file': 'Book file is required when download is enabled.'})
+
+        if status_value == BookStatus.PUBLISHED and not book_file:
+            raise serializers.ValidationError({'file': 'Published books must include a book file.'})
 
         return attrs
 
@@ -275,9 +341,50 @@ def validate_uploaded_extension(value, allowed_extensions, field_name):
         )
 
 
+def validate_uploaded_size(value, max_size, field_name):
+    if value.size > max_size:
+        raise serializers.ValidationError(
+            f'{field_name.capitalize()} is too large. Maximum size is {max_size // (1024 * 1024)} MB.'
+        )
+
+
 def is_staff_or_moderator(user):
     return (
         user.is_staff
         or user.is_superuser
         or getattr(user, 'role', None) in {'moderator', 'admin'}
     )
+
+
+def build_book_action_url(request, viewname, slug, can_access):
+    if not request or not can_access:
+        return None
+    return request.build_absolute_uri(reverse(viewname, kwargs={'slug': slug}))
+
+
+def can_user_read_book(request, book):
+    if not request or not request.user.is_authenticated:
+        return False
+
+    user = request.user
+    if is_moderator_or_staff(user):
+        return True
+
+    if book.authors.filter(user=user).exists():
+        return True
+
+    return book.can_read(user)
+
+
+def can_user_download_file(request, book):
+    if not request or not request.user.is_authenticated or not book.file:
+        return False
+
+    user = request.user
+    if is_moderator_or_staff(user):
+        return True
+
+    if book.authors.filter(user=user).exists():
+        return True
+
+    return book.can_download(user)

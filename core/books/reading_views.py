@@ -1,6 +1,7 @@
 """Views for bookmarks, reading history, reviews, and author requests."""
 import logging
 
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -16,12 +17,15 @@ from rest_framework.generics import (
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.api_errors import error_response
 from core.books.permissions import IsModeratorOrStaff, IsOwner, IsReader
 from core.books.reading_serializers import (
+    AuthorRequestModerationResultSerializer,
     AuthorRequestCreateSerializer,
     AuthorRequestModerationSerializer,
     AuthorRequestSerializer,
     BookmarkSerializer,
+    HelpfulReviewResponseSerializer,
     ReadingHistorySerializer,
     ReviewCreateSerializer,
     ReviewSerializer,
@@ -41,6 +45,7 @@ class BookmarkListView(ListAPIView):
         return Bookmark.objects.filter(reader=self.request.user.reader_profile).select_related('book')
 
     @extend_schema(
+        operation_id='reading_bookmark_list',
         summary='My bookmarks',
         description='List all bookmarks of the current reader.',
         tags=['Reading Features'],
@@ -56,11 +61,12 @@ class BookmarkCreateView(CreateAPIView):
     permission_classes = [permissions.IsAuthenticated, IsReader]
 
     @extend_schema(
+        operation_id='reading_bookmark_create',
         summary='Create bookmark',
         description='Create a new bookmark for a book.',
         tags=['Reading Features'],
         request=BookmarkSerializer,
-        responses={201: BookmarkSerializer, 400: OpenApiTypes.OBJECT},
+        responses={201: BookmarkSerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT},
     )
     def post(self, request, *args, **kwargs):
         logger.info("POST /api/reading/bookmarks/create/ for user %s", request.user.username)
@@ -74,6 +80,7 @@ class BookmarkDeleteView(DestroyAPIView):
     lookup_field = 'pk'
 
     @extend_schema(
+        operation_id='reading_bookmark_delete',
         summary='Delete bookmark',
         description='Delete bookmark by ID.',
         tags=['Reading Features'],
@@ -92,6 +99,7 @@ class ReadingHistoryListView(ListAPIView):
         return ReadingHistory.objects.filter(reader=self.request.user.reader_profile).select_related('book')
 
     @extend_schema(
+        operation_id='reading_history_list',
         summary='Reading history',
         description='List reading history with progress of the current reader.',
         tags=['Reading Features'],
@@ -107,11 +115,12 @@ class ReadingHistoryCreateView(CreateAPIView):
     permission_classes = [permissions.IsAuthenticated, IsReader]
 
     @extend_schema(
+        operation_id='reading_history_create',
         summary='Start reading',
         description='Create reading history for a new book, or return the existing history for it.',
         tags=['Reading Features'],
         request=ReadingHistorySerializer,
-        responses={200: ReadingHistorySerializer, 201: ReadingHistorySerializer, 400: OpenApiTypes.OBJECT},
+        responses={200: ReadingHistorySerializer, 201: ReadingHistorySerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT},
     )
     def post(self, request, *args, **kwargs):
         logger.info("POST /api/reading/reading-history/create/ for user %s", request.user.username)
@@ -122,18 +131,27 @@ class ReadingHistoryCreateView(CreateAPIView):
 
         book = serializer.validated_data['book']
         reader_profile = request.user.reader_profile
-        existing = ReadingHistory.objects.filter(reader=reader_profile, book=book).first()
-        if existing:
-            output = self.get_serializer(existing)
-            return Response(output.data, status=status.HTTP_200_OK)
+        last_page_read = serializer.validated_data.get('last_page_read', 0)
 
-        self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        try:
+            with transaction.atomic():
+                history, created = ReadingHistory.objects.get_or_create(
+                    reader=reader_profile,
+                    book=book,
+                    defaults={'last_page_read': last_page_read},
+                )
+        except IntegrityError:
+            history = ReadingHistory.objects.get(reader=reader_profile, book=book)
+            created = False
 
-    def perform_create(self, serializer):
-        history = serializer.save()
+        if created and last_page_read:
+            total_pages = history.book.pages if history.book and history.book.pages > 0 else 1
+            history.update_progress(last_page_read, total_pages)
+
         sync_reader_books_read(history.reader)
+        output = self.get_serializer(history)
+        headers = self.get_success_headers(output.data) if created else {}
+        return Response(output.data, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK, headers=headers)
 
 
 class ReadingHistoryUpdateView(UpdateAPIView):
@@ -143,11 +161,12 @@ class ReadingHistoryUpdateView(UpdateAPIView):
     lookup_field = 'pk'
 
     @extend_schema(
+        operation_id='reading_history_update',
         summary='Update reading progress',
         description='Update reading progress for an existing history record.',
         tags=['Reading Features'],
         request=ReadingHistorySerializer,
-        responses={200: ReadingHistorySerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT},
+        responses={200: ReadingHistorySerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
     )
     def patch(self, request, *args, **kwargs):
         logger.info("PATCH /api/reading/reading-history/%s/update/", kwargs.get('pk'))
@@ -170,6 +189,7 @@ class ReviewListView(ListAPIView):
         return queryset
 
     @extend_schema(
+        operation_id='reading_review_list',
         summary='List reviews',
         description='List all reviews or filter them by book.',
         tags=['Reading Features'],
@@ -186,11 +206,12 @@ class ReviewCreateView(CreateAPIView):
     permission_classes = [permissions.IsAuthenticated, IsReader]
 
     @extend_schema(
+        operation_id='reading_review_create',
         summary='Create review',
         description='Create a new review for a book.',
         tags=['Reading Features'],
         request=ReviewCreateSerializer,
-        responses={201: ReviewSerializer, 400: OpenApiTypes.OBJECT},
+        responses={201: ReviewSerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT},
     )
     def post(self, request, *args, **kwargs):
         logger.info("POST /api/reading/reviews/create/ for user %s", request.user.username)
@@ -212,6 +233,7 @@ class ReviewDetailView(RetrieveAPIView):
     lookup_field = 'pk'
 
     @extend_schema(
+        operation_id='reading_review_retrieve',
         summary='Review details',
         description='Get full review details.',
         tags=['Reading Features'],
@@ -226,11 +248,12 @@ class ReviewHelpfulView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     @extend_schema(
+        operation_id='reading_review_helpful',
         summary='Mark review as helpful',
         description='Increment helpful counter for a review.',
         tags=['Reading Features'],
         request=None,
-        responses={200: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+        responses={200: HelpfulReviewResponseSerializer, 404: OpenApiTypes.OBJECT},
     )
     def post(self, request, pk):
         logger.info("POST /api/reading/reviews/%s/helpful/", pk)
@@ -246,6 +269,7 @@ class ReviewDeleteView(DestroyAPIView):
     lookup_field = 'pk'
 
     @extend_schema(
+        operation_id='reading_review_delete',
         summary='Delete review',
         description='Delete your own review.',
         tags=['Reading Features'],
@@ -266,11 +290,12 @@ class AuthorRequestView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     @extend_schema(
+        operation_id='reading_author_request_create',
         summary='Request author status',
         description='Create an author profile request for moderation.',
         tags=['Author Management'],
         request=AuthorRequestCreateSerializer,
-        responses={201: AuthorRequestSerializer, 400: OpenApiTypes.OBJECT},
+        responses={201: AuthorRequestSerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT},
     )
     def post(self, request):
         logger.info("POST /api/reading/author/request/ for user %s", request.user.username)
@@ -278,17 +303,19 @@ class AuthorRequestView(APIView):
         if hasattr(request.user, 'author_profile'):
             author_profile = request.user.author_profile
             if author_profile.is_approved:
-                return Response(
-                    {'detail': 'You already have an approved author profile.'},
-                    status=status.HTTP_400_BAD_REQUEST,
+                return error_response(
+                    error_type='validation_error',
+                    detail='Validation failed.',
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    errors={'author_profile': ['You already have an approved author profile.']},
                 )
 
-            return Response(
-                {
-                    'detail': 'Your author request is already pending moderation.',
-                    'requested_at': author_profile.requested_at,
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+            return error_response(
+                error_type='validation_error',
+                detail='Validation failed.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                errors={'author_profile': ['Your author request is already pending moderation.']},
+                extra={'requested_at': author_profile.requested_at},
             )
 
         serializer = AuthorRequestCreateSerializer(data=request.data)
@@ -313,6 +340,7 @@ class AuthorRequestsListView(ListAPIView):
         return AuthorProfile.objects.filter(is_approved=False).select_related('user').order_by('requested_at')
 
     @extend_schema(
+        operation_id='reading_author_request_list',
         summary='List author requests',
         description='List pending author requests for moderators and staff.',
         tags=['Author Management'],
@@ -327,11 +355,12 @@ class AuthorRequestModerateView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsModeratorOrStaff]
 
     @extend_schema(
+        operation_id='reading_author_request_moderate',
         summary='Moderate author request',
         description='Approve or reject an author request.',
         tags=['Author Management'],
         request=AuthorRequestModerationSerializer,
-        responses={200: OpenApiTypes.OBJECT, 400: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+        responses={200: AuthorRequestModerationResultSerializer, 400: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
     )
     def patch(self, request, pk):
         logger.info("PATCH /api/reading/author/requests/%s/moderate/", pk)

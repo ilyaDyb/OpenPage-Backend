@@ -11,7 +11,8 @@ urlpatterns = [
     path('user/verify-email/', views.VerifyEmailView.as_view(), name='verify-email'),
 
     path('token/', views.LoginView.as_view(), name='login'),
-    path('token/refresh/', TokenRefreshView.as_view(), name='logout'),
+    path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
+    path('login-options/', views.LoginChoiceView.as_view(), name='login-options'),
 
     # QR Authentication endpoints
     path('qr-auth/create/', views.QRAuthCreateView.as_view(), name='qr-auth-create'),

@@ -258,6 +258,13 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+MAX_AVATAR_UPLOAD_SIZE = int(os.getenv('MAX_AVATAR_UPLOAD_SIZE', 2 * 1024 * 1024))
+MAX_COVER_UPLOAD_SIZE = int(os.getenv('MAX_COVER_UPLOAD_SIZE', 5 * 1024 * 1024))
+MAX_BOOK_UPLOAD_SIZE = int(os.getenv('MAX_BOOK_UPLOAD_SIZE', 25 * 1024 * 1024))
+DATA_UPLOAD_MAX_MEMORY_SIZE = int(
+    os.getenv('DATA_UPLOAD_MAX_MEMORY_SIZE', MAX_BOOK_UPLOAD_SIZE + MAX_COVER_UPLOAD_SIZE + MAX_AVATAR_UPLOAD_SIZE)
+)
+FILE_UPLOAD_MAX_MEMORY_SIZE = int(os.getenv('FILE_UPLOAD_MAX_MEMORY_SIZE', 5 * 1024 * 1024))
 
 AUTH_USER_MODEL = "auth_.User"
 # Default primary key field type
@@ -300,14 +307,34 @@ LOGGING = {
             'level': 'INFO',
             'propagate': False,
         },
-        'auth_': {
+        'django.request': {
             'handlers': ['console'],
-            'level': 'DEBUG',
+            'level': 'ERROR',
             'propagate': False,
         },
-        'telegram_bot': {
+        'core': {
             'handlers': ['console'],
-            'level': 'DEBUG',
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'core.auth_': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'core.books': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'core.profiles': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'core.auth_.telegram_bot': {
+            'handlers': ['console'],
+            'level': 'INFO',
             'propagate': False,
         },
     },

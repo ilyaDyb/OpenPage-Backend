@@ -9,7 +9,8 @@ from rest_framework.generics import RetrieveAPIView, RetrieveUpdateAPIView, get_
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.profiles.models import AuthorProfile, ReaderProfile
+from core.api_errors import error_response
+from core.profiles.models import ReaderProfile
 from core.profiles.serializers import (
     AuthorProfileSerializer,
     PublicUserProfileSerializer,
@@ -47,11 +48,7 @@ class CurrentUserProfileView(RetrieveUpdateAPIView):
         description='Replace editable fields on the authenticated user profile.',
         tags=['User Profiles'],
         request=UserProfileSerializer,
-        responses={
-            200: UserProfileSerializer,
-            400: OpenApiTypes.OBJECT,
-            401: OpenApiTypes.OBJECT,
-        },
+        responses={200: UserProfileSerializer, 400: OpenApiTypes.OBJECT, 401: OpenApiTypes.OBJECT},
     )
     def put(self, request, *args, **kwargs):
         logger.info("PUT /api/profile/ for user %s", request.user.username)
@@ -63,11 +60,7 @@ class CurrentUserProfileView(RetrieveUpdateAPIView):
         description='Update one or more editable fields on the authenticated user profile.',
         tags=['User Profiles'],
         request=UserProfileSerializer,
-        responses={
-            200: UserProfileSerializer,
-            400: OpenApiTypes.OBJECT,
-            401: OpenApiTypes.OBJECT,
-        },
+        responses={200: UserProfileSerializer, 400: OpenApiTypes.OBJECT, 401: OpenApiTypes.OBJECT},
     )
     def patch(self, request, *args, **kwargs):
         logger.info("PATCH /api/profile/ for user %s", request.user.username)
@@ -137,24 +130,19 @@ class CreateReaderProfileView(APIView):
 
     @extend_schema(
         operation_id='profile_reader_create',
-        summary='Create reader profile',
-        description='Create a reader profile for the authenticated user.',
+        summary='Ensure reader profile',
+        description='Return the authenticated user profile and create reader profile only if it is missing.',
         tags=['User Profiles'],
         request=None,
-        responses={201: UserProfileSerializer, 400: OpenApiTypes.OBJECT},
+        responses={200: UserProfileSerializer, 201: UserProfileSerializer},
     )
     def post(self, request):
         logger.info("POST /api/profile/reader/ for user %s", request.user.username)
-
-        if hasattr(request.user, 'reader_profile'):
-            return Response(
-                {'error': 'Профиль читателя уже существует'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        ReaderProfile.objects.create(user=request.user)
-        logger.info("Reader profile created for user %s", request.user.username)
-        return Response(UserProfileSerializer(request.user).data, status=status.HTTP_201_CREATED)
+        _, created = ReaderProfile.objects.get_or_create(user=request.user)
+        if created:
+            logger.info("Reader profile created for user %s", request.user.username)
+            return Response(UserProfileSerializer(request.user).data, status=status.HTTP_201_CREATED)
+        return Response(UserProfileSerializer(request.user).data, status=status.HTTP_200_OK)
 
 
 class CreateAuthorProfileView(APIView):
@@ -173,16 +161,15 @@ class CreateAuthorProfileView(APIView):
         logger.info("POST /api/profile/author/ for user %s", request.user.username)
 
         if hasattr(request.user, 'author_profile'):
-            return Response(
-                {'error': 'Профиль автора уже существует'},
-                status=status.HTTP_400_BAD_REQUEST,
+            return error_response(
+                error_type='validation_error',
+                detail='Validation failed.',
+                status_code=status.HTTP_400_BAD_REQUEST,
+                errors={'author_profile': ['Author profile already exists.']},
             )
 
         serializer = AuthorProfileSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save(user=request.user, requested_at=timezone.now())
-            logger.info("Author profile created for user %s", request.user.username)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-        logger.error("Author profile validation failed: %s", serializer.errors)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(user=request.user, requested_at=timezone.now(), is_approved=False)
+        logger.info("Author profile created for user %s", request.user.username)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)

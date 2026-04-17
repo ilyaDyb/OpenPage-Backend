@@ -44,6 +44,16 @@ class IsApprovedAuthor(permissions.BasePermission):
         return bool(author_profile and author_profile.is_approved)
 
 
+class HasAuthorProfile(permissions.BasePermission):
+    message = 'Author profile is required.'
+
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+
+        return get_author_profile(request.user) is not None
+
+
 class IsBookAuthorOrStaff(permissions.BasePermission):
     message = 'You are not allowed to modify this book.'
 

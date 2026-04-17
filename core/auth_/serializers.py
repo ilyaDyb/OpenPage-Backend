@@ -45,12 +45,27 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
         return attrs
 
-    def save(self, **kwargs):
-        pass
-
 class EmailVerifySerializer(serializers.Serializer):
     email = serializers.EmailField()
     code = serializers.CharField(max_length=6)
+
+
+class DetailResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+
+
+class LoginSerializer(serializers.Serializer):
+    username_or_email = serializers.CharField()
+    password = serializers.CharField(write_only=True, style={'input_type': 'password'})
+
+
+class TokenPairSerializer(serializers.Serializer):
+    refresh = serializers.CharField()
+    access = serializers.CharField()
+
+
+class LoginResponseSerializer(TokenPairSerializer):
+    user = UserSerializer(required=False)
 
 class QRSessionRequestSerializer(serializers.Serializer):
     """Serializer for requesting a QR login session"""
@@ -116,6 +131,17 @@ class QRAuthConfirmedSerializer(serializers.Serializer):
     
     class Meta:
         ref_name = 'QRAuthConfirmed'
+
+
+class QRAuthCancelSerializer(serializers.Serializer):
+    token = serializers.UUIDField()
+
+
+class QRAuthActionResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField()
+    username = serializers.CharField(required=False)
+    expires_in = serializers.IntegerField(required=False)
+    error = serializers.CharField(required=False)
 
 class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     @classmethod
