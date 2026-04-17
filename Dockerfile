@@ -19,9 +19,11 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV DJANGO_SETTINGS_MODULE=core.open_page.settings
 
-RUN chmod +x /app/entrypoint.sh
+RUN cp /app/entrypoint.sh /usr/local/bin/openpage-entrypoint.sh \
+    && sed -i 's/\r$//' /usr/local/bin/openpage-entrypoint.sh \
+    && chmod +x /usr/local/bin/openpage-entrypoint.sh
 
 EXPOSE 8000
 
 # Использование entrypoint скрипта
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/openpage-entrypoint.sh"]
