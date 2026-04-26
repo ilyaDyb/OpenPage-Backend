@@ -33,7 +33,7 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
-      - static_volume:/app/static
+      - static_volume:/app/staticfiles
       - media_volume:/app/media
     depends_on:
       db:
@@ -42,6 +42,23 @@ services:
       - .env
     command: python -m core.open_page.devserver
     restart: always
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: openpage_nginx
+    ports:
+      - "80:80"
+    environment:
+      FRONTEND_UPSTREAM: ${FRONTEND_UPSTREAM:-host.docker.internal:7070}
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - static_volume:/var/www/openpage/static:ro
+      - media_volume:/var/www/openpage/media:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - web
+    restart: unless-stopped
 
 volumes:
   postgres_data:
