@@ -1,13 +1,15 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from core.books.models import Book, BookStatus, Genre
+from core.books.models import Book, BookComment, BookLike, BookStatus, Genre
 from core.profiles.models import AuthorProfile
 
 
@@ -68,6 +70,55 @@ class BookModelTests(TestCase):
         self.book.allow_download = True
         self.book.save(update_fields=['allow_download'])
         self.assertTrue(self.book.can_download(self.user))
+
+    def test_book_like_unique_constraint_blocks_duplicate_rows(self):
+        BookLike.objects.create(reader=self.user.reader_profile, book=self.book)
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                BookLike.objects.create(reader=self.user.reader_profile, book=self.book)
+
+    def test_book_comment_rejects_parent_from_another_book(self):
+        other_book = Book.objects.create(
+            title='Other Book',
+            status=BookStatus.PUBLISHED,
+            is_active=True,
+        )
+        other_book.authors.add(self.author_profile)
+        parent = BookComment.objects.create(
+            reader=self.user.reader_profile,
+            book=other_book,
+            text='Parent comment',
+        )
+
+        with self.assertRaises(ValidationError):
+            BookComment.objects.create(
+                reader=self.user.reader_profile,
+                book=self.book,
+                parent=parent,
+                text='Invalid reply',
+            )
+
+    def test_book_comment_rejects_reply_to_reply(self):
+        parent = BookComment.objects.create(
+            reader=self.user.reader_profile,
+            book=self.book,
+            text='Parent comment',
+        )
+        reply = BookComment.objects.create(
+            reader=self.user.reader_profile,
+            book=self.book,
+            parent=parent,
+            text='First reply',
+        )
+
+        with self.assertRaises(ValidationError):
+            BookComment.objects.create(
+                reader=self.user.reader_profile,
+                book=self.book,
+                parent=reply,
+                text='Nested reply',
+            )
 
 
 class GenreModelTests(TestCase):
@@ -222,6 +273,95 @@ class BookAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.book.refresh_from_db()
         self.assertEqual(self.book.title, 'Updated title')
+
+    def test_book_like_routes_and_metadata(self):
+        self.client.force_authenticate(user=self.reader_user)
+
+        create_response = self.client.post(reverse('books:book-like', kwargs={'pk': self.book.pk}))
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(create_response.data['liked'])
+        self.assertEqual(create_response.data['likes_count'], 1)
+
+        duplicate_response = self.client.post(reverse('books:book-like', kwargs={'pk': self.book.pk}))
+        self.assertEqual(duplicate_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(duplicate_response.data['likes_count'], 1)
+
+        detail_response = self.client.get(reverse('books:book-detail', kwargs={'pk': self.book.pk}))
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(detail_response.data['is_liked'])
+        self.assertEqual(detail_response.data['likes_count'], 1)
+
+        delete_response = self.client.delete(reverse('books:book-like', kwargs={'pk': self.book.pk}))
+        self.assertEqual(delete_response.status_code, status.HTTP_200_OK)
+        self.assertFalse(delete_response.data['liked'])
+        self.assertEqual(delete_response.data['likes_count'], 0)
+        self.assertFalse(BookLike.objects.filter(reader=self.reader_user.reader_profile, book=self.book).exists())
+
+    def test_book_comment_routes_create_reply_list_and_delete(self):
+        self.client.force_authenticate(user=self.reader_user)
+
+        create_response = self.client.post(
+            reverse('books:book-comment-list', kwargs={'pk': self.book.pk}),
+            {'text': 'First comment'},
+            format='json',
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        comment_id = create_response.data['id']
+
+        reply_response = self.client.post(
+            reverse('books:book-comment-list', kwargs={'pk': self.book.pk}),
+            {'text': 'Reply comment', 'parent': comment_id},
+            format='json',
+        )
+        self.assertEqual(reply_response.status_code, status.HTTP_201_CREATED)
+        reply_id = reply_response.data['id']
+
+        list_response = self.client.get(reverse('books:book-comment-list', kwargs={'pk': self.book.pk}))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(list_response.data[0]['replies_count'], 1)
+        self.assertEqual(len(list_response.data[0]['replies']), 1)
+
+        detail_response = self.client.get(
+            reverse('books:book-comment-detail', kwargs={'pk': comment_id})
+        )
+        self.assertEqual(detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail_response.data['replies_count'], 1)
+
+        book_detail_response = self.client.get(reverse('books:book-detail', kwargs={'pk': self.book.pk}))
+        self.assertEqual(book_detail_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(book_detail_response.data['comments_count'], 2)
+
+        delete_response = self.client.delete(
+            reverse('books:book-comment-delete', kwargs={'pk': reply_id})
+        )
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(BookComment.objects.filter(pk=reply_id).exists())
+
+    def test_book_comment_create_rejects_reply_to_reply(self):
+        self.client.force_authenticate(user=self.reader_user)
+
+        parent = BookComment.objects.create(
+            reader=self.reader_user.reader_profile,
+            book=self.book,
+            text='Parent comment',
+        )
+        reply = BookComment.objects.create(
+            reader=self.reader_user.reader_profile,
+            book=self.book,
+            parent=parent,
+            text='Child reply',
+        )
+
+        response = self.client.post(
+            reverse('books:book-comment-list', kwargs={'pk': self.book.pk}),
+            {'text': 'Nested reply', 'parent': str(reply.pk)},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['type'], 'validation_error')
+        self.assertIn('parent', response.data['errors'])
 
     def test_moderator_can_delete_book(self):
         self.client.force_authenticate(user=self.moderator_user)

@@ -7,7 +7,7 @@ from rest_framework import serializers
 
 from core.books.models import BookStatus
 from core.books.permissions import is_moderator_or_staff
-from core.books.serializers import BookDetailSerializer
+from core.books.serializers import BookDetailSerializer, is_liked_by_current_reader
 from core.profiles.models import AuthorProfile, Bookmark, ReadingHistory, Review
 
 
@@ -79,6 +79,7 @@ class ReadingHistorySerializer(serializers.ModelSerializer):
     book_title = serializers.CharField(source='book.title', read_only=True)
     book_slug = serializers.CharField(source='book.slug', read_only=True)
     cover_url = serializers.SerializerMethodField()
+    current_page = serializers.IntegerField(source='last_page_read', read_only=True)
 
     class Meta:
         model = ReadingHistory
@@ -92,8 +93,10 @@ class ReadingHistorySerializer(serializers.ModelSerializer):
             'started_at',
             'finished_at',
             'last_page_read',
+            'current_page',
             'progress_percentage',
             'is_completed',
+            'updated_at',
         ]
         read_only_fields = [
             'id',
@@ -102,6 +105,8 @@ class ReadingHistorySerializer(serializers.ModelSerializer):
             'finished_at',
             'progress_percentage',
             'is_completed',
+            'current_page',
+            'updated_at',
             'book_title',
             'book_slug',
             'cover_url',
@@ -167,6 +172,8 @@ class ReviewSerializer(serializers.ModelSerializer):
     reader_name = serializers.CharField(source='reader.user.username', read_only=True)
     book_title = serializers.CharField(source='book.title', read_only=True)
     book_slug = serializers.CharField(source='book.slug', read_only=True)
+    likes_count = serializers.IntegerField(source='helpful_count', read_only=True)
+    is_liked = serializers.SerializerMethodField()
 
     class Meta:
         model = Review
@@ -181,6 +188,8 @@ class ReviewSerializer(serializers.ModelSerializer):
             'text',
             'is_verified_purchase',
             'helpful_count',
+            'likes_count',
+            'is_liked',
             'created_at',
             'updated_at',
         ]
@@ -192,10 +201,16 @@ class ReviewSerializer(serializers.ModelSerializer):
             'book_slug',
             'is_verified_purchase',
             'helpful_count',
+            'likes_count',
+            'is_liked',
             'created_at',
             'updated_at',
         ]
         ref_name = 'ReadingReview'
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_is_liked(self, obj):
+        return is_liked_by_current_reader(self.context.get('request'), obj)
 
 
 class ReviewCreateSerializer(serializers.ModelSerializer):
@@ -279,18 +294,23 @@ class AuthorRequestModerationSerializer(serializers.Serializer):
 class BookReadResponseSerializer(serializers.Serializer):
     book = BookDetailSerializer()
     reading_history = ReadingHistorySerializer()
+    bookmarks = BookmarkSerializer(many=True)
 
 
 class BookProgressResponseSerializer(serializers.Serializer):
     success = serializers.BooleanField()
     history_id = serializers.UUIDField()
     last_page_read = serializers.IntegerField()
+    current_page = serializers.IntegerField()
     progress_percentage = serializers.IntegerField()
     is_completed = serializers.BooleanField()
+    updated_at = serializers.DateTimeField()
 
 
-class HelpfulReviewResponseSerializer(serializers.Serializer):
+class ReviewLikeResponseSerializer(serializers.Serializer):
     success = serializers.BooleanField()
+    liked = serializers.BooleanField()
+    likes_count = serializers.IntegerField()
     helpful_count = serializers.IntegerField()
 
 

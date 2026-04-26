@@ -1,10 +1,11 @@
 """Модели книг и жанров."""
 import uuid
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.text import slugify
 
-from core.profiles.models import AuthorProfile
+from core.profiles.models import AuthorProfile, ReaderProfile
 
 
 class Genre(models.Model):
@@ -133,3 +134,123 @@ class Book(models.Model):
             return True
 
         return False
+
+
+class BookLike(models.Model):
+    """Book like."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    reader = models.ForeignKey(
+        ReaderProfile,
+        on_delete=models.CASCADE,
+        related_name='book_likes',
+        verbose_name='Читатель',
+    )
+    book = models.ForeignKey(
+        Book,
+        on_delete=models.CASCADE,
+        related_name='likes',
+        verbose_name='Книга',
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
+
+    class Meta:
+        verbose_name = 'Лайк книги'
+        verbose_name_plural = 'Лайки книг'
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['reader', 'book'],
+                name='books_book_like_unique_reader_book',
+            ),
+        ]
+
+    def __str__(self):
+        return f"Лайк книги: {self.reader.user.username} -> {self.book.title}"
+
+
+class ReviewLike(models.Model):
+    """Review like."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    reader = models.ForeignKey(
+        ReaderProfile,
+        on_delete=models.CASCADE,
+        related_name='review_likes',
+        verbose_name='Читатель',
+    )
+    review = models.ForeignKey(
+        'profiles.Review',
+        on_delete=models.CASCADE,
+        related_name='likes',
+        verbose_name='Отзыв',
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
+
+    class Meta:
+        verbose_name = 'Лайк отзыва'
+        verbose_name_plural = 'Лайки отзывов'
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['reader', 'review'],
+                name='books_review_like_unique_reader_review',
+            ),
+        ]
+
+    def __str__(self):
+        return f"Лайк отзыва: {self.reader.user.username} -> {self.review_id}"
+
+
+class BookComment(models.Model):
+    """Book comment with one reply level."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    reader = models.ForeignKey(
+        ReaderProfile,
+        on_delete=models.CASCADE,
+        related_name='book_comments',
+        verbose_name='Читатель',
+    )
+    book = models.ForeignKey(
+        Book,
+        on_delete=models.CASCADE,
+        related_name='comments',
+        verbose_name='Книга',
+    )
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.CASCADE,
+        related_name='replies',
+        null=True,
+        blank=True,
+        verbose_name='Родительский комментарий',
+    )
+    text = models.TextField(max_length=2000, verbose_name='Текст комментария')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Дата создания')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Дата обновления')
+
+    class Meta:
+        verbose_name = 'Комментарий к книге'
+        verbose_name_plural = 'Комментарии к книгам'
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['book', 'created_at']),
+            models.Index(fields=['parent', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"Комментарий: {self.reader.user.username} -> {self.book.title}"
+
+    def clean(self):
+        super().clean()
+
+        if self.parent_id and self.parent and self.parent.book_id != self.book_id:
+            raise ValidationError({'parent': 'Parent comment must belong to the same book.'})
+
+        if self.parent_id and self.parent and self.parent.parent_id is not None:
+            raise ValidationError({'parent': 'Replies can only target top-level comments.'})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)

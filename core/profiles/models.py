@@ -107,6 +107,7 @@ class ReadingHistory(models.Model):
     last_page_read = models.PositiveIntegerField(default=0, verbose_name='Последняя прочитанная страница')
     progress_percentage = models.PositiveIntegerField(default=0, validators=[MaxValueValidator(100)], verbose_name='Процент прогресса')
     is_completed = models.BooleanField(default=False, verbose_name='Завершено')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Дата обновления')
 
     class Meta:
         verbose_name = 'История чтения'
@@ -123,6 +124,10 @@ class ReadingHistory(models.Model):
         status = "завершено" if self.is_completed else "в процессе"
         return f"{self.reader.user.username} ({status})"
 
+    @property
+    def current_page(self):
+        return self.last_page_read
+
     def update_progress(self, current_page, total_pages):
         """Обновить прогресс чтения"""
 
@@ -138,7 +143,7 @@ class ReadingHistory(models.Model):
             self.is_completed = False
             self.finished_at = None
 
-        self.save(update_fields=['last_page_read', 'progress_percentage', 'is_completed', 'finished_at'])
+        self.save(update_fields=['last_page_read', 'progress_percentage', 'is_completed', 'finished_at', 'updated_at'])
 
 
 class Review(models.Model):

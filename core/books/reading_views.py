@@ -18,6 +18,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.api_errors import error_response
+from core.books.models import ReviewLike
 from core.books.permissions import IsModeratorOrStaff, IsOwner, IsReader
 from core.books.reading_serializers import (
     AuthorRequestModerationResultSerializer,
@@ -25,10 +26,11 @@ from core.books.reading_serializers import (
     AuthorRequestModerationSerializer,
     AuthorRequestSerializer,
     BookmarkSerializer,
-    HelpfulReviewResponseSerializer,
     ReadingHistorySerializer,
+    ReviewLikeResponseSerializer,
     ReviewCreateSerializer,
     ReviewSerializer,
+    ensure_reader_book_access,
 )
 from core.books.reading_api import sync_reader_books_read
 from core.profiles.models import AuthorProfile, Bookmark, ReadingHistory, Review
@@ -42,13 +44,18 @@ class BookmarkListView(ListAPIView):
     permission_classes = [permissions.IsAuthenticated, IsReader]
 
     def get_queryset(self):
-        return Bookmark.objects.filter(reader=self.request.user.reader_profile).select_related('book')
+        queryset = Bookmark.objects.filter(reader=self.request.user.reader_profile).select_related('book')
+        book_id = self.request.query_params.get('book')
+        if book_id:
+            queryset = queryset.filter(book_id=book_id)
+        return queryset.order_by('book__title', 'page_number', 'created_at')
 
     @extend_schema(
         operation_id='reading_bookmark_list',
         summary='My bookmarks',
-        description='List all bookmarks of the current reader.',
+        description='List all bookmarks of the current reader, optionally filtered by book.',
         tags=['Reading Features'],
+        parameters=[OpenApiParameter(name='book', required=False, type=str, description='Book ID')],
         responses={200: BookmarkSerializer(many=True)},
     )
     def get(self, request, *args, **kwargs):
@@ -182,7 +189,7 @@ class ReviewListView(ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        queryset = Review.objects.select_related('reader__user', 'book').order_by('-created_at')
+        queryset = Review.objects.select_related('reader__user', 'book').prefetch_related('likes').order_by('-created_at')
         book_id = self.request.query_params.get('book')
         if book_id:
             queryset = queryset.filter(book_id=book_id)
@@ -227,7 +234,7 @@ class ReviewCreateView(CreateAPIView):
 
 
 class ReviewDetailView(RetrieveAPIView):
-    queryset = Review.objects.select_related('reader__user', 'book')
+    queryset = Review.objects.select_related('reader__user', 'book').prefetch_related('likes')
     serializer_class = ReviewSerializer
     permission_classes = [permissions.IsAuthenticated]
     lookup_field = 'pk'
@@ -244,22 +251,71 @@ class ReviewDetailView(RetrieveAPIView):
         return super().get(request, *args, **kwargs)
 
 
-class ReviewHelpfulView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+class ReviewLikeView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsReader]
+
+    @extend_schema(
+        operation_id='reading_review_like',
+        summary='Like review',
+        description='Create a like for a review or return the current liked state.',
+        tags=['Reading Features'],
+        request=None,
+        responses={200: ReviewLikeResponseSerializer, 201: ReviewLikeResponseSerializer, 400: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
+    def post(self, request, pk):
+        logger.info("POST /api/reading/reviews/%s/like/ by user %s", pk, request.user.username)
+        review = get_review_for_like(request, pk)
+        _, created = ReviewLike.objects.get_or_create(reader=request.user.reader_profile, review=review)
+        likes_count = sync_review_likes_count(review)
+        return Response(
+            {
+                'success': True,
+                'liked': True,
+                'likes_count': likes_count,
+                'helpful_count': likes_count,
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @extend_schema(
+        operation_id='reading_review_unlike',
+        summary='Unlike review',
+        description='Delete the current reader like from a review.',
+        tags=['Reading Features'],
+        request=None,
+        responses={200: ReviewLikeResponseSerializer, 400: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
+    def delete(self, request, pk):
+        logger.info("DELETE /api/reading/reviews/%s/like/ by user %s", pk, request.user.username)
+        review = get_review_for_like(request, pk)
+        ReviewLike.objects.filter(reader=request.user.reader_profile, review=review).delete()
+        likes_count = sync_review_likes_count(review)
+        return Response(
+            {
+                'success': True,
+                'liked': False,
+                'likes_count': likes_count,
+                'helpful_count': likes_count,
+            }
+        )
+
+
+class ReviewHelpfulView(ReviewLikeView):
+    permission_classes = [permissions.IsAuthenticated, IsReader]
 
     @extend_schema(
         operation_id='reading_review_helpful',
         summary='Mark review as helpful',
-        description='Increment helpful counter for a review.',
+        description='Legacy alias for review like.',
         tags=['Reading Features'],
         request=None,
-        responses={200: HelpfulReviewResponseSerializer, 404: OpenApiTypes.OBJECT},
+        responses={200: ReviewLikeResponseSerializer, 400: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
     )
     def post(self, request, pk):
-        logger.info("POST /api/reading/reviews/%s/helpful/", pk)
-        review = get_object_or_404(Review, pk=pk)
-        review.mark_as_helpful()
-        return Response({'success': True, 'helpful_count': review.helpful_count})
+        logger.info("POST /api/reading/reviews/%s/helpful/ by user %s", pk, request.user.username)
+        response = super().post(request, pk)
+        response.status_code = status.HTTP_200_OK
+        return response
 
 
 class ReviewDeleteView(DestroyAPIView):
@@ -397,3 +453,17 @@ class AuthorRequestModerateView(APIView):
                 'reason': rejection_reason,
             }
         )
+
+
+def get_review_for_like(request, pk):
+    review = get_object_or_404(Review.objects.select_related('book', 'reader__user').prefetch_related('likes'), pk=pk)
+    ensure_reader_book_access(request.user, review.book, require_read_access=False)
+    return review
+
+
+def sync_review_likes_count(review):
+    likes_count = ReviewLike.objects.filter(review=review).count()
+    if review.helpful_count != likes_count:
+        review.helpful_count = likes_count
+        review.save(update_fields=['helpful_count'])
+    return likes_count

@@ -3,24 +3,38 @@ import logging
 
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
-from rest_framework import permissions
+from rest_framework import permissions, status
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.generics import (
     CreateAPIView,
+    DestroyAPIView,
     ListAPIView,
     ListCreateAPIView,
     RetrieveAPIView,
     RetrieveUpdateDestroyAPIView,
     UpdateAPIView,
-    DestroyAPIView,
+    get_object_or_404,
 )
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from core.books.models import Book, Genre
-from core.books.permissions import CanViewBook, HasAuthorProfile, IsApprovedAuthor, IsBookAuthorOrStaff, IsModeratorOrStaff
+from core.books.models import Book, BookComment, BookLike, Genre
+from core.books.permissions import (
+    CanViewBook,
+    HasAuthorProfile,
+    IsApprovedAuthor,
+    IsBookAuthorOrStaff,
+    IsModeratorOrStaff,
+    IsOwner,
+    IsReader,
+)
+from core.books.reading_serializers import ensure_reader_book_access
 from core.books.serializers import (
+    BookCommentCreateSerializer,
+    BookCommentSerializer,
     BookCreateUpdateSerializer,
     BookDetailSerializer,
+    BookLikeResponseSerializer,
     BookListSerializer,
     GenreSerializer,
 )
@@ -129,7 +143,7 @@ class BookListView(ListAPIView):
     ordering_fields = ['title', 'created_at', 'updated_at', 'published_at', 'views_count', 'downloads_count', 'price']
 
     def get_queryset(self):
-        queryset = Book.objects.prefetch_related('authors', 'genres').filter(status='published', is_active=True)
+        queryset = Book.objects.prefetch_related('authors', 'genres', 'likes').filter(status='published', is_active=True)
         params = self.request.query_params
 
         genre_id = params.get('genres')
@@ -190,7 +204,7 @@ class BookListView(ListAPIView):
 
 
 class BookDetailView(RetrieveAPIView):
-    queryset = Book.objects.prefetch_related('authors', 'genres').all()
+    queryset = Book.objects.prefetch_related('authors', 'genres', 'likes', 'comments').all()
     serializer_class = BookDetailSerializer
     permission_classes = [permissions.IsAuthenticated, CanViewBook]
     lookup_field = 'pk'
@@ -211,7 +225,7 @@ class BookDetailView(RetrieveAPIView):
 
 
 class BookBySlugView(RetrieveAPIView):
-    queryset = Book.objects.prefetch_related('authors', 'genres').all()
+    queryset = Book.objects.prefetch_related('authors', 'genres', 'likes', 'comments').all()
     serializer_class = BookDetailSerializer
     permission_classes = [permissions.IsAuthenticated, CanViewBook]
     lookup_field = 'slug'
@@ -335,7 +349,7 @@ class MyBooksView(ListAPIView):
         if not author_profile:
             return Book.objects.none()
 
-        return Book.objects.filter(authors=author_profile).prefetch_related('authors', 'genres')
+        return Book.objects.filter(authors=author_profile).prefetch_related('authors', 'genres', 'likes')
 
     @extend_schema(
         operation_id='books_my_list',
@@ -347,3 +361,160 @@ class MyBooksView(ListAPIView):
     def get(self, request, *args, **kwargs):
         logger.info("GET /api/books/my/")
         return super().get(request, *args, **kwargs)
+
+
+class BookLikeView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsReader]
+
+    @extend_schema(
+        operation_id='books_book_like',
+        summary='Like book',
+        description='Create a like for a book or return the current liked state.',
+        tags=['Books'],
+        request=None,
+        responses={200: BookLikeResponseSerializer, 201: BookLikeResponseSerializer, 400: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
+    def post(self, request, pk):
+        logger.info("POST /api/books/%s/like/ by user %s", pk, request.user.username)
+        book = get_book_for_interaction(request, pk)
+        _, created = BookLike.objects.get_or_create(reader=request.user.reader_profile, book=book)
+        return Response(
+            {
+                'success': True,
+                'liked': True,
+                'likes_count': get_book_likes_count(book),
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @extend_schema(
+        operation_id='books_book_unlike',
+        summary='Unlike book',
+        description='Delete the current reader like from a book.',
+        tags=['Books'],
+        request=None,
+        responses={200: BookLikeResponseSerializer, 400: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
+    def delete(self, request, pk):
+        logger.info("DELETE /api/books/%s/like/ by user %s", pk, request.user.username)
+        book = get_book_for_interaction(request, pk)
+        BookLike.objects.filter(reader=request.user.reader_profile, book=book).delete()
+        return Response(
+            {
+                'success': True,
+                'liked': False,
+                'likes_count': get_book_likes_count(book),
+            }
+        )
+
+
+class BookCommentListCreateView(ListCreateAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [permissions.IsAuthenticated(), IsReader()]
+        return [permissions.IsAuthenticated()]
+
+    def get_book(self):
+        if not hasattr(self, '_book'):
+            self._book = get_book_for_interaction(self.request, self.kwargs['pk'])
+        return self._book
+
+    def get_queryset(self):
+        return (
+            BookComment.objects
+            .filter(book=self.get_book(), parent__isnull=True)
+            .select_related('reader__user', 'book')
+            .prefetch_related('replies__reader__user')
+        )
+
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return BookCommentCreateSerializer
+        return BookCommentSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['book'] = self.get_book()
+        return context
+
+    @extend_schema(
+        operation_id='books_book_comment_list',
+        summary='List book comments',
+        description='List top-level comments for a book with nested replies.',
+        tags=['Books'],
+        responses={200: BookCommentSerializer(many=True), 400: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
+    def get(self, request, *args, **kwargs):
+        logger.info("GET /api/books/%s/comments/", kwargs.get('pk'))
+        return super().get(request, *args, **kwargs)
+
+    @extend_schema(
+        operation_id='books_book_comment_create',
+        summary='Create book comment',
+        description='Create a top-level comment or a reply for a book.',
+        tags=['Books'],
+        request=BookCommentCreateSerializer,
+        responses={201: BookCommentSerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
+    def post(self, request, *args, **kwargs):
+        logger.info("POST /api/books/%s/comments/ by user %s", kwargs.get('pk'), request.user.username)
+        return super().post(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        comment = serializer.save()
+        output = BookCommentSerializer(comment, context=self.get_serializer_context())
+        headers = self.get_success_headers(output.data)
+        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+class BookCommentDetailView(RetrieveAPIView):
+    queryset = BookComment.objects.select_related('reader__user', 'book', 'parent').prefetch_related('replies__reader__user')
+    serializer_class = BookCommentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'pk'
+
+    @extend_schema(
+        operation_id='books_book_comment_retrieve',
+        summary='Book comment details',
+        description='Get a comment with its direct replies.',
+        tags=['Books'],
+        responses={200: BookCommentSerializer, 404: OpenApiTypes.OBJECT},
+    )
+    def get(self, request, *args, **kwargs):
+        logger.info("GET /api/books/comments/%s/", kwargs.get('pk'))
+        return super().get(request, *args, **kwargs)
+
+
+class BookCommentDeleteView(DestroyAPIView):
+    queryset = BookComment.objects.select_related('reader__user', 'book', 'parent')
+    serializer_class = BookCommentSerializer
+    permission_classes = [permissions.IsAuthenticated, IsOwner]
+    lookup_field = 'pk'
+
+    @extend_schema(
+        operation_id='books_book_comment_delete',
+        summary='Delete book comment',
+        description='Delete your own book comment or reply.',
+        tags=['Books'],
+        responses={204: None, 403: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+    )
+    def delete(self, request, *args, **kwargs):
+        logger.info("DELETE /api/books/comments/%s/delete/", kwargs.get('pk'))
+        return super().delete(request, *args, **kwargs)
+
+
+def get_book_for_interaction(request, pk):
+    book = get_object_or_404(
+        Book.objects.prefetch_related('authors', 'genres', 'likes', 'comments'),
+        pk=pk,
+    )
+    ensure_reader_book_access(request.user, book, require_read_access=False)
+    return book
+
+
+def get_book_likes_count(book):
+    return BookLike.objects.filter(book=book).count()

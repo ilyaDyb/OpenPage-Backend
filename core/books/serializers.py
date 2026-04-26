@@ -8,7 +8,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from core.books.models import Book, BookStatus, Genre
+from core.books.models import Book, BookComment, BookStatus, Genre
 from core.books.permissions import is_moderator_or_staff
 from core.profiles.models import AuthorProfile
 from core.profiles.serializers import AuthorProfileSerializer
@@ -56,6 +56,9 @@ class BookListSerializer(serializers.ModelSerializer):
     cover_url = serializers.SerializerMethodField()
     read_url = serializers.SerializerMethodField()
     download_url = serializers.SerializerMethodField()
+    likes_count = serializers.SerializerMethodField()
+    comments_count = serializers.SerializerMethodField()
+    is_liked = serializers.SerializerMethodField()
 
     class Meta:
         model = Book
@@ -68,6 +71,9 @@ class BookListSerializer(serializers.ModelSerializer):
             'cover_url',
             'read_url',
             'download_url',
+            'likes_count',
+            'comments_count',
+            'is_liked',
             'price',
             'is_free',
             'is_free_to_read',
@@ -110,6 +116,18 @@ class BookListSerializer(serializers.ModelSerializer):
             can_access=can_user_download_file(request, obj),
         )
 
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_likes_count(self, obj):
+        return get_related_count(obj, 'likes')
+
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_comments_count(self, obj):
+        return get_related_count(obj, 'comments')
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_is_liked(self, obj):
+        return is_liked_by_current_reader(self.context.get('request'), obj)
+
 
 class BookDetailSerializer(serializers.ModelSerializer):
     authors = AuthorProfileSerializer(many=True, read_only=True)
@@ -120,6 +138,9 @@ class BookDetailSerializer(serializers.ModelSerializer):
     download_url = serializers.SerializerMethodField()
     authors_list = serializers.CharField(read_only=True)
     display_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    likes_count = serializers.SerializerMethodField()
+    comments_count = serializers.SerializerMethodField()
+    is_liked = serializers.SerializerMethodField()
 
     class Meta:
         model = Book
@@ -140,6 +161,9 @@ class BookDetailSerializer(serializers.ModelSerializer):
             'is_free_to_read',
             'allow_download',
             'display_price',
+            'likes_count',
+            'comments_count',
+            'is_liked',
             'pages',
             'published_at',
             'views_count',
@@ -191,6 +215,18 @@ class BookDetailSerializer(serializers.ModelSerializer):
             obj.slug,
             can_access=can_user_download_file(request, obj),
         )
+
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_likes_count(self, obj):
+        return get_related_count(obj, 'likes')
+
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_comments_count(self, obj):
+        return get_related_count(obj, 'comments')
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_is_liked(self, obj):
+        return is_liked_by_current_reader(self.context.get('request'), obj)
 
 
 class BookCreateUpdateSerializer(serializers.ModelSerializer):
@@ -315,6 +351,98 @@ class BookCreateUpdateSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class BookCommentReplySerializer(serializers.ModelSerializer):
+    reader_name = serializers.CharField(source='reader.user.username', read_only=True)
+
+    class Meta:
+        model = BookComment
+        fields = [
+            'id',
+            'reader',
+            'reader_name',
+            'parent',
+            'text',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'reader', 'reader_name', 'parent', 'created_at', 'updated_at']
+        ref_name = 'BookCommentReply'
+
+
+class BookCommentSerializer(serializers.ModelSerializer):
+    reader_name = serializers.CharField(source='reader.user.username', read_only=True)
+    replies_count = serializers.SerializerMethodField()
+    replies = BookCommentReplySerializer(many=True, read_only=True)
+
+    class Meta:
+        model = BookComment
+        fields = [
+            'id',
+            'reader',
+            'reader_name',
+            'book',
+            'parent',
+            'text',
+            'replies_count',
+            'replies',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'id',
+            'reader',
+            'reader_name',
+            'book',
+            'replies_count',
+            'replies',
+            'created_at',
+            'updated_at',
+        ]
+        ref_name = 'BookComment'
+
+    @extend_schema_field(OpenApiTypes.INT)
+    def get_replies_count(self, obj):
+        return get_related_count(obj, 'replies')
+
+
+class BookCommentCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BookComment
+        fields = ['text', 'parent']
+        ref_name = 'BookCommentCreate'
+
+    def validate_text(self, value):
+        if not value or not value.strip():
+            raise serializers.ValidationError('Comment text cannot be blank.')
+        return value.strip()
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        book = self.context['book']
+        parent = attrs.get('parent')
+
+        if parent and parent.book_id != book.id:
+            raise serializers.ValidationError({'parent': 'Parent comment must belong to the same book.'})
+
+        if parent and parent.parent_id is not None:
+            raise serializers.ValidationError({'parent': 'Replies can only target top-level comments.'})
+
+        return attrs
+
+    def create(self, validated_data):
+        return BookComment.objects.create(
+            reader=self.context['request'].user.reader_profile,
+            book=self.context['book'],
+            **validated_data,
+        )
+
+
+class BookLikeResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField()
+    liked = serializers.BooleanField()
+    likes_count = serializers.IntegerField()
+
+
 def validate_unique_slug(model_class, value, instance=None):
     if not value:
         return value
@@ -388,3 +516,27 @@ def can_user_download_file(request, book):
         return True
 
     return book.can_download(user)
+
+
+def get_related_count(obj, relation_name):
+    prefetched = getattr(obj, '_prefetched_objects_cache', {})
+    if relation_name in prefetched:
+        return len(prefetched[relation_name])
+
+    return getattr(obj, relation_name).count()
+
+
+def is_liked_by_current_reader(request, obj):
+    if not request or not request.user.is_authenticated:
+        return False
+
+    try:
+        reader_id = request.user.reader_profile.id
+    except Exception:
+        return False
+
+    prefetched = getattr(obj, '_prefetched_objects_cache', {})
+    if 'likes' in prefetched:
+        return any(like.reader_id == reader_id for like in prefetched['likes'])
+
+    return obj.likes.filter(reader_id=reader_id).exists()

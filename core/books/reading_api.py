@@ -13,10 +13,15 @@ from rest_framework.views import APIView
 
 from core.api_errors import error_response
 from core.books.permissions import IsReader, is_moderator_or_staff
-from core.books.reading_serializers import BookProgressResponseSerializer, BookReadResponseSerializer, ReadingHistorySerializer
+from core.books.reading_serializers import (
+    BookProgressResponseSerializer,
+    BookReadResponseSerializer,
+    BookmarkSerializer,
+    ReadingHistorySerializer,
+)
 from core.books.serializers import BookDetailSerializer
 from core.books.models import Book
-from core.profiles.models import ReadingHistory
+from core.profiles.models import Bookmark, ReadingHistory
 
 
 logger = logging.getLogger(__name__)
@@ -55,11 +60,16 @@ class BookReadView(RetrieveAPIView):
             )
         except IntegrityError:
             history = ReadingHistory.objects.get(reader=request.user.reader_profile, book=book)
+        bookmarks = Bookmark.objects.filter(
+            reader=request.user.reader_profile,
+            book=book,
+        ).order_by('page_number', 'created_at')
 
         return Response(
             {
                 'book': self.get_serializer(book, context={**self.get_serializer_context(), 'include_file_url': True}).data,
                 'reading_history': ReadingHistorySerializer(history, context={'request': request}).data,
+                'bookmarks': BookmarkSerializer(bookmarks, many=True, context={'request': request}).data,
             }
         )
 
@@ -121,7 +131,7 @@ class BookProgressView(APIView):
                 status_code=status.HTTP_403_FORBIDDEN,
             )
 
-        current_page = request.data.get('current_page')
+        current_page = request.data.get('current_page', request.data.get('last_page_read'))
         if current_page is None:
             return error_response(
                 error_type='validation_error',
@@ -168,8 +178,10 @@ class BookProgressView(APIView):
                 'success': True,
                 'history_id': str(history.pk),
                 'last_page_read': history.last_page_read,
+                'current_page': history.current_page,
                 'progress_percentage': history.progress_percentage,
                 'is_completed': history.is_completed,
+                'updated_at': history.updated_at,
             }
         )
 

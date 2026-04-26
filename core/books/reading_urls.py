@@ -16,6 +16,7 @@ from core.books.reading_views import (
     ReviewDeleteView,
     ReviewDetailView,
     ReviewHelpfulView,
+    ReviewLikeView,
     ReviewListView,
 )
 
@@ -39,6 +40,7 @@ urlpatterns = [
     path('reviews/', ReviewListView.as_view(), name='review-list'),
     path('reviews/create/', ReviewCreateView.as_view(), name='review-create'),
     path('reviews/<uuid:pk>/', ReviewDetailView.as_view(), name='review-detail'),
+    path('reviews/<uuid:pk>/like/', ReviewLikeView.as_view(), name='review-like'),
     path('reviews/<uuid:pk>/helpful/', ReviewHelpfulView.as_view(), name='review-helpful'),
     path('reviews/<uuid:pk>/delete/', ReviewDeleteView.as_view(), name='review-delete'),
 
