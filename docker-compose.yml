@@ -72,9 +72,9 @@ services:
       - .:/app
       - static_volume:/app/staticfiles
       - media_volume:/app/media
-    depends_on:
-      db:
-        condition: service_healthy
+    # depends_on:
+    #   db:
+    #     condition: service_healthy
     environment:
       <<: *web-env
     command: python -m core.open_page.devserver
@@ -132,7 +132,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  # postgres_data:
   static_volume:
   media_volume:
   redis_data:
