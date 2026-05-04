@@ -54,7 +54,7 @@ INSTALLED_APPS = [
     'core.auth_.apps.AuthConfig',
     'core.profiles.apps.ProfilesConfig',
     'core.books.apps.BooksConfig',
-    'core.notifications.apps.NotificationsConfig',
+    # 'core.notifications.apps.NotificationsConfig',
 
 ]
 
