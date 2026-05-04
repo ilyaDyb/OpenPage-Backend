@@ -56,7 +56,6 @@ services:
   #   restart: unless-stopped
 
   redis:
-    profiles: ["redis"]
     image: redis:7
     container_name: openpage_redis
     ports:
@@ -117,7 +116,6 @@ services:
   #   restart: always
 
   nginx:
-    profiles: ["nginx"]
     image: nginx:1.27-alpine
     container_name: openpage_nginx
     ports:
