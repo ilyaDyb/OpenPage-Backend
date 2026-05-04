@@ -6,6 +6,7 @@ x-web-env: &web-env
   DB_HOST: ${DB_HOST:-db}
   DB_PORT: ${DB_PORT:-5432}
   USE_REDIS: ${USE_REDIS:-False}
+  CELERY_TASK_ALWAYS_EAGER: ${CELERY_TASK_ALWAYS_EAGER:-True}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379/1}
   CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
   CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
@@ -55,6 +56,7 @@ services:
   #   restart: unless-stopped
 
   redis:
+    profiles: ["redis"]
     image: redis:7
     container_name: openpage_redis
     ports:
@@ -115,6 +117,7 @@ services:
   #   restart: always
 
   nginx:
+    profiles: ["nginx"]
     image: nginx:1.27-alpine
     container_name: openpage_nginx
     ports:

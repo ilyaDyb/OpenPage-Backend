@@ -88,7 +88,9 @@ TEMPLATES = [
     },
 ]
 
-if os.environ.get('USE_REDIS') == 'True':
+USE_REDIS = os.environ.get('USE_REDIS') == 'True'
+
+if USE_REDIS:
     CACHES = {
         'default': {
             'BACKEND': 'django_redis.cache.RedisCache',
@@ -233,6 +235,7 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = os.environ.get('CELERY_TIMEZONE', 'UTC')
 CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_ALWAYS_EAGER = os.environ.get('CELERY_TASK_ALWAYS_EAGER', 'False' if USE_REDIS else 'True') == 'True'
 CELERY_BEAT_SCHEDULE = {
     'notifications-process-pending-events': {
         'task': 'core.notifications.tasks.process_pending_notification_events',
