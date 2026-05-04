@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     'core.auth_.apps.AuthConfig',
     'core.profiles.apps.ProfilesConfig',
     'core.books.apps.BooksConfig',
+    'core.notifications.apps.NotificationsConfig',
 
 ]
 
@@ -106,25 +107,25 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 # Database
 # https://docs.djangoproject.com/en/5.0/ref/settings/#databases
 
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.sqlite3',
-#         'NAME': BASE_DIR / 'db.sqlite3',
-#     }
-# }
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        'NAME': os.environ.get("DB_NAME", 'postgres'),
-        'USER': os.environ.get("DB_USER", 'postgres'),
-        'PASSWORD': os.environ.get("DB_PASSWORD", 'postgres'),
-        'HOST': os.environ.get("DB_HOST", 'db'),
-        'PORT': os.environ.get("DB_PORT", '5432'),
-        'OPTIONS': {
-            'sslmode': 'disable',
-        },
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
     }
 }
+# DATABASES = {
+#     "default": {
+#         "ENGINE": "django.db.backends.postgresql",
+#         'NAME': os.environ.get("DB_NAME", 'postgres'),
+#         'USER': os.environ.get("DB_USER", 'postgres'),
+#         'PASSWORD': os.environ.get("DB_PASSWORD", 'postgres'),
+#         'HOST': os.environ.get("DB_HOST", 'db'),
+#         'PORT': os.environ.get("DB_PORT", '5432'),
+#         'OPTIONS': {
+#             'sslmode': 'disable',
+#         },
+#     }
+# }
 
 # Password validation
 # https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
@@ -224,6 +225,20 @@ SPECTACULAR_SETTINGS = {
 REDIS_HOST = os.environ.get('REDIS_HOST', 'redis')
 REDIS_PORT = int(os.environ.get('REDIS_PORT', 6379))
 REDIS_DB = int(os.environ.get('REDIS_DB', 1))
+
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', os.environ.get('REDIS_URL', 'redis://redis:6379/1'))
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = os.environ.get('CELERY_TIMEZONE', 'UTC')
+CELERY_TASK_TRACK_STARTED = True
+CELERY_BEAT_SCHEDULE = {
+    'notifications-process-pending-events': {
+        'task': 'core.notifications.tasks.process_pending_notification_events',
+        'schedule': float(os.environ.get('NOTIFICATION_OUTBOX_POLL_SECONDS', 60)),
+    },
+}
 
 # Telegram Bot Configuration
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
@@ -328,6 +343,11 @@ LOGGING = {
             'propagate': False,
         },
         'core.profiles': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'core.notifications': {
             'handlers': ['console'],
             'level': 'INFO',
             'propagate': False,

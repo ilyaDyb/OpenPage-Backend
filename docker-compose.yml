@@ -7,6 +7,8 @@ x-web-env: &web-env
   DB_PORT: ${DB_PORT:-5432}
   USE_REDIS: ${USE_REDIS:-False}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379/1}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
   REDIS_HOST: ${REDIS_HOST:-redis}
   REDIS_PORT: ${REDIS_PORT:-6379}
   REDIS_DB: ${REDIS_DB:-1}
@@ -32,25 +34,25 @@ x-web-env: &web-env
   DEVSERVER_POLL_SECONDS: ${DEVSERVER_POLL_SECONDS:-1}
 
 services:
-  db:
-    image: postgres:14
-    container_name: openpage_db
-    volumes:
-      - postgres_data:/var/lib/postgresql/data/
-      - ./docker/postgres-entrypoint.sh:/usr/local/bin/openpage-postgres-entrypoint.sh:ro
-    entrypoint: ["/bin/sh", "/usr/local/bin/openpage-postgres-entrypoint.sh"]
-    environment:
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_DB: ${DB_NAME:-openpage}
-    ports:
-      - "5434:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "PGPASSWORD=\"$${POSTGRES_PASSWORD}\" psql -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -c 'SELECT 1' >/dev/null"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
+  # db:
+  #   image: postgres:14
+  #   container_name: openpage_db
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data/
+  #     - ./docker/postgres-entrypoint.sh:/usr/local/bin/openpage-postgres-entrypoint.sh:ro
+  #   entrypoint: ["/bin/sh", "/usr/local/bin/openpage-postgres-entrypoint.sh"]
+  #   environment:
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+  #     POSTGRES_USER: ${DB_USER:-postgres}
+  #     POSTGRES_DB: ${DB_NAME:-openpage}
+  #   ports:
+  #     - "5434:5432"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "PGPASSWORD=\"$${POSTGRES_PASSWORD}\" psql -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -c 'SELECT 1' >/dev/null"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 5
+  #   restart: unless-stopped
 
   redis:
     image: redis:7
@@ -77,6 +79,40 @@ services:
       <<: *web-env
     command: python -m core.open_page.devserver
     restart: always
+
+  # celery:
+  #   build: .
+  #   container_name: openpage_celery
+  #   volumes:
+  #     - .:/app
+  #     - static_volume:/app/staticfiles
+  #     - media_volume:/app/media
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_started
+  #   environment:
+  #     <<: *web-env
+  #   command: celery -A core.open_page worker -l INFO
+  #   restart: always
+
+  # celery_beat:
+  #   build: .
+  #   container_name: openpage_celery_beat
+  #   volumes:
+  #     - .:/app
+  #     - static_volume:/app/staticfiles
+  #     - media_volume:/app/media
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_started
+  #   environment:
+  #     <<: *web-env
+  #   command: celery -A core.open_page beat -l INFO
+  #   restart: always
 
   nginx:
     image: nginx:1.27-alpine
