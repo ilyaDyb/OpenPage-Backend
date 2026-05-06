@@ -58,6 +58,8 @@ Renew:
 sh letsencrypt.sh renew
 ```
 
+The certificate is stored in the `certbot_certs` Docker volume. Backend or nginx container restarts do not require issuing it again.
+
 ## Database
 
 The active setup uses SQLite: `db.sqlite3`.

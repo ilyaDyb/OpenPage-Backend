@@ -87,7 +87,7 @@ enable_https() {
     fi
 
     cp nginx/default.ssl.conf.template.example nginx/default.conf.template
-    compose up -d nginx
+    compose up -d --force-recreate nginx
 }
 
 renew() {
