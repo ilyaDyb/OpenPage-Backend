@@ -36,6 +36,7 @@ Usage:
   sh letsencrypt.sh issue
   sh letsencrypt.sh enable
   sh letsencrypt.sh renew
+  sh letsencrypt.sh status
 
 Before issue:
   1. Point DNS to the VPS.
@@ -87,12 +88,18 @@ enable_https() {
     fi
 
     cp nginx/default.ssl.conf.template.example nginx/default.conf.template
-    compose up -d --force-recreate nginx
+    compose rm -sf nginx
+    compose up -d nginx
 }
 
 renew() {
     compose run --rm certbot renew --webroot --webroot-path /var/www/certbot
     compose exec nginx nginx -s reload
+}
+
+status() {
+    compose ps nginx
+    compose exec nginx nginx -T | grep -E "listen 80|listen 443|return 301|ssl_certificate|Strict-Transport" || true
 }
 
 case "${1:-}" in
@@ -104,6 +111,9 @@ case "${1:-}" in
         ;;
     renew)
         renew
+        ;;
+    status)
+        status
         ;;
     *)
         usage
