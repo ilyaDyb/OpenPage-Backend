@@ -38,14 +38,12 @@ services:
   # db:
   #   image: postgres:14
   #   container_name: openpage_db
+  #   environment:
+  #     POSTGRES_DB: ${DB_NAME:-openpage}
+  #     POSTGRES_USER: ${DB_USER:-postgres}
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
   #   volumes:
   #     - postgres_data:/var/lib/postgresql/data/
-  #     - ./docker/postgres-entrypoint.sh:/usr/local/bin/openpage-postgres-entrypoint.sh:ro
-  #   entrypoint: ["/bin/sh", "/usr/local/bin/openpage-postgres-entrypoint.sh"]
-  #   environment:
-  #     POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-  #     POSTGRES_USER: ${DB_USER:-postgres}
-  #     POSTGRES_DB: ${DB_NAME:-openpage}
   #   ports:
   #     - "5434:5432"
   #   healthcheck:
@@ -73,67 +71,47 @@ services:
       - .:/app
       - static_volume:/app/staticfiles
       - media_volume:/app/media
+    environment:
+      <<: *web-env
     # depends_on:
     #   db:
     #     condition: service_healthy
-    environment:
-      <<: *web-env
     command: python -m core.open_page.devserver
     restart: always
-
-  # celery:
-  #   build: .
-  #   container_name: openpage_celery
-  #   volumes:
-  #     - .:/app
-  #     - static_volume:/app/staticfiles
-  #     - media_volume:/app/media
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_started
-  #   environment:
-  #     <<: *web-env
-  #   command: celery -A core.open_page worker -l INFO
-  #   restart: always
-
-  # celery_beat:
-  #   build: .
-  #   container_name: openpage_celery_beat
-  #   volumes:
-  #     - .:/app
-  #     - static_volume:/app/staticfiles
-  #     - media_volume:/app/media
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_started
-  #   environment:
-  #     <<: *web-env
-  #   command: celery -A core.open_page beat -l INFO
-  #   restart: always
 
   nginx:
     image: nginx:1.27-alpine
     container_name: openpage_nginx
     ports:
       - "80:80"
+      - "443:443"
     environment:
       FRONTEND_UPSTREAM: ${FRONTEND_UPSTREAM:-host.docker.internal:7070}
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:-xn--e1aamodgc0e.xn--p1ai www.xn--e1aamodgc0e.xn--p1ai}
+      LETSENCRYPT_DOMAIN: ${LETSENCRYPT_DOMAIN:-xn--e1aamodgc0e.xn--p1ai}
     volumes:
-      - ./nginx/templates:/etc/nginx/templates:ro
+      - ./nginx:/etc/nginx/templates:ro
       - static_volume:/var/www/openpage/static:ro
       - media_volume:/var/www/openpage/media:ro
+      - certbot_www:/var/www/certbot:ro
+      - certbot_certs:/etc/letsencrypt:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       - web
     restart: unless-stopped
 
+  certbot:
+    image: certbot/certbot:v2.11.0
+    container_name: openpage_certbot
+    volumes:
+      - certbot_www:/var/www/certbot
+      - certbot_certs:/etc/letsencrypt
+
 volumes:
   # postgres_data:
   static_volume:
   media_volume:
   redis_data:
+  certbot_www:
+  certbot_certs:
