@@ -12,9 +12,9 @@ sys.path.insert(0, str(BASE_DIR / 'core'))
 
 SECRET_KEY = 'django-insecure-@fl4vrhgl%=uciu6969-kpojs3^(g1(^l02netw22p#6k6#zh2'
 
-DEBUG = True
+DEBUG = False
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1', '185.244.51.104', 'https://xn--e1aamodgc0e.xn--p1ai', 'xn--e1aamodgc0e.xn--p1ai').split(',')
 
 
 INSTALLED_APPS = [
