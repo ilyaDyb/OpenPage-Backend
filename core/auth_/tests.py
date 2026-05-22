@@ -105,3 +105,15 @@ class QRAuthSecurityTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["success"])
+
+
+@override_settings(ROOT_URLCONF="core.open_page.urls", DEBUG=False, ALLOWED_HOSTS=["testserver"])
+class ProductionPublicAuthTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_public_login_options_do_not_require_api_secret_key(self):
+        response = self.client.get("/api/login-options/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("options", response.json())

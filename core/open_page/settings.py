@@ -10,11 +10,11 @@ from corsheaders.defaults import default_headers
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(BASE_DIR / 'core'))
 
-SECRET_KEY = 'django-insecure-@fl4vrhgl%=uciu6969-kpojs3^(g1(^l02netw22p#6k6#zh2'
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-@fl4vrhgl%=uciu6969-kpojs3^(g1(^l02netw22p#6k6#zh2')
 
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True').lower() in {'1', 'true', 'yes', 'on'}
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS = [host.strip() for host in os.getenv('ALLOWED_HOSTS', '*').split(',') if host.strip()]
 
 
 INSTALLED_APPS = [
@@ -41,7 +41,6 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'corsheaders.middleware.CorsMiddleware',
-    'core.auth_.middleware.SecretKeyMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
