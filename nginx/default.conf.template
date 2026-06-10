@@ -7,7 +7,7 @@ upstream openpage_frontend {
 }
 
 server {
-    listen 80;
+    listen 8080;
     server_name ${NGINX_SERVER_NAME};
 
     client_max_body_size 50m;
