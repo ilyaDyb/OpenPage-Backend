@@ -27,13 +27,14 @@ from core.books.reading_serializers import (
     AuthorRequestSerializer,
     BookmarkSerializer,
     ReadingHistorySerializer,
+    RecentBookViewSerializer,
     ReviewLikeResponseSerializer,
     ReviewCreateSerializer,
     ReviewSerializer,
     ensure_reader_book_access,
 )
 from core.books.reading_api import sync_reader_books_read
-from core.profiles.models import AuthorProfile, Bookmark, ReadingHistory, Review
+from core.profiles.models import AuthorProfile, Bookmark, ReadingHistory, RecentBookView, Review
 
 
 logger = logging.getLogger(__name__)
@@ -182,6 +183,54 @@ class ReadingHistoryUpdateView(UpdateAPIView):
     def perform_update(self, serializer):
         history = serializer.save()
         sync_reader_books_read(history.reader)
+
+
+class RecentBookViewListView(ListAPIView):
+    serializer_class = RecentBookViewSerializer
+    permission_classes = [permissions.IsAuthenticated, IsReader]
+
+    def get_queryset(self):
+        raw_limit = self.request.query_params.get('limit', 20)
+        try:
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            limit = 20
+        limit = min(max(limit, 1), 100)
+
+        return (
+            RecentBookView.objects.filter(reader=self.request.user.reader_profile)
+            .select_related('book')
+            .prefetch_related('book__authors', 'book__genres', 'book__likes')
+            .order_by('-last_viewed_at')[:limit]
+        )
+
+    @extend_schema(
+        operation_id='reading_recent_book_list',
+        summary='Recently viewed books',
+        description='List books recently opened by the current reader.',
+        tags=['Reading Features'],
+        parameters=[OpenApiParameter(name='limit', required=False, type=int, description='Result limit, 1-100.')],
+        responses={200: RecentBookViewSerializer(many=True)},
+    )
+    def get(self, request, *args, **kwargs):
+        logger.info("GET /api/reading/recent-books/ for user %s", request.user.username)
+        return super().get(request, *args, **kwargs)
+
+
+class RecentBookViewClearView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsReader]
+
+    @extend_schema(
+        operation_id='reading_recent_book_clear',
+        summary='Clear recently viewed books',
+        tags=['Reading Features'],
+        request=None,
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    def delete(self, request):
+        logger.info("DELETE /api/reading/recent-books/clear/ for user %s", request.user.username)
+        deleted_count, _ = RecentBookView.objects.filter(reader=request.user.reader_profile).delete()
+        return Response({'deleted_count': deleted_count})
 
 
 class ReviewListView(ListAPIView):

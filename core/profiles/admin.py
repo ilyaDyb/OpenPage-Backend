@@ -1,7 +1,15 @@
 from django.contrib import admin
 from django.utils import timezone
 
-from core.profiles.models import AuthorProfile, Bookmark, ReaderProfile, ReadingHistory, Review
+from core.profiles.models import (
+    AuthorProfile,
+    AuthorSubscription,
+    Bookmark,
+    ReaderProfile,
+    ReadingHistory,
+    RecentBookView,
+    Review,
+)
 
 
 @admin.register(AuthorProfile)
@@ -133,6 +141,38 @@ class ReaderProfileAdmin(admin.ModelAdmin):
     @admin.display(description='Любимых жанров')
     def preferred_genres_count(self, obj):
         return obj.preferred_genres.count()
+
+
+@admin.register(AuthorSubscription)
+class AuthorSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ('reader', 'author', 'notify_new_books', 'created_at')
+    list_filter = ('notify_new_books', 'created_at')
+    search_fields = (
+        'reader__user__username',
+        'reader__user__email',
+        'author__user__username',
+        'author__user__email',
+    )
+    raw_id_fields = ('reader', 'author')
+    readonly_fields = ('id', 'created_at')
+    date_hierarchy = 'created_at'
+    list_select_related = ('reader__user', 'author__user')
+
+
+@admin.register(RecentBookView)
+class RecentBookViewAdmin(admin.ModelAdmin):
+    list_display = ('book', 'reader', 'viewed_count', 'last_viewed_at', 'created_at')
+    list_filter = ('last_viewed_at', 'created_at')
+    search_fields = (
+        'book__title',
+        'book__slug',
+        'reader__user__username',
+        'reader__user__email',
+    )
+    raw_id_fields = ('reader', 'book')
+    readonly_fields = ('id', 'viewed_count', 'last_viewed_at', 'created_at')
+    date_hierarchy = 'last_viewed_at'
+    list_select_related = ('book', 'reader__user')
 
 
 @admin.register(Bookmark)

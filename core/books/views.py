@@ -1,6 +1,7 @@
 """Views for books and genres."""
 import logging
 
+from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import permissions, status
@@ -18,7 +19,7 @@ from rest_framework.generics import (
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.books.models import Book, BookComment, BookLike, Genre
+from core.books.models import Book, BookComment, BookLike, BookStatus, Genre
 from core.books.permissions import (
     CanViewBook,
     HasAuthorProfile,
@@ -38,6 +39,8 @@ from core.books.serializers import (
     BookListSerializer,
     GenreSerializer,
 )
+from core.notifications.services import notify_author_new_book, notify_book_comment_created
+from core.profiles.services import record_recent_book_view
 
 
 logger = logging.getLogger(__name__)
@@ -144,6 +147,7 @@ class BookListView(ListAPIView):
 
     def get_queryset(self):
         queryset = Book.objects.prefetch_related('authors', 'genres', 'likes').filter(status='published', is_active=True)
+
         params = self.request.query_params
 
         genre_id = params.get('genres')
@@ -220,6 +224,7 @@ class BookDetailView(RetrieveAPIView):
         logger.info("GET /api/books/%s/", kwargs.get('pk'))
         book = self.get_object()
         book.update_views()
+        record_recent_book_view(request.user, book)
         serializer = self.get_serializer(book)
         return Response(serializer.data)
 
@@ -241,6 +246,7 @@ class BookBySlugView(RetrieveAPIView):
         logger.info("GET /api/books/slug/%s/", kwargs.get('slug'))
         book = self.get_object()
         book.update_views()
+        record_recent_book_view(request.user, book)
         serializer = self.get_serializer(book)
         return Response(serializer.data)
 
@@ -276,6 +282,7 @@ class BookCreateView(CreateAPIView):
         book = serializer.save()
         if not book.authors.filter(pk=author_profile.pk).exists():
             book.authors.add(author_profile)
+        publish_book_if_needed(book)
         logger.info("Book '%s' created", book.title)
 
 
@@ -312,9 +319,11 @@ class BookUpdateView(UpdateAPIView):
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
+        was_available = instance.status == BookStatus.PUBLISHED and instance.is_active
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
+        publish_book_if_needed(serializer.instance, was_available=was_available)
         output = BookDetailSerializer(serializer.instance, context=self.get_serializer_context())
         return Response(output.data)
 
@@ -466,6 +475,7 @@ class BookCommentListCreateView(ListCreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         comment = serializer.save()
+        notify_book_comment_created(comment)
         output = BookCommentSerializer(comment, context=self.get_serializer_context())
         headers = self.get_success_headers(output.data)
         return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
@@ -518,3 +528,20 @@ def get_book_for_interaction(request, pk):
 
 def get_book_likes_count(book):
     return BookLike.objects.filter(book=book).count()
+
+
+def publish_book_if_needed(book, was_available=False):
+    is_available = book.status == BookStatus.PUBLISHED and book.is_active
+    if not is_available:
+        return
+
+    update_fields = []
+    if book.published_at is None:
+        book.published_at = timezone.now()
+        update_fields.append('published_at')
+
+    if update_fields:
+        book.save(update_fields=update_fields)
+
+    if not was_available:
+        notify_author_new_book(book)

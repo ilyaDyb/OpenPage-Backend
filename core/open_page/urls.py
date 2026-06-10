@@ -27,6 +27,7 @@ urlpatterns = [
     # API URLs
     path('api/', include('core.auth_.urls')),
     path('api/profile/', include('core.profiles.urls')),
+    path('api/notifications/', include('core.notifications.urls')),
     # КНИГИ - ВРЕМЕННО ОТКЛЮЧЕНО
     path('api/books/', include('core.books.urls')),
     path('api/reading/', include('core.books.reading_urls')),

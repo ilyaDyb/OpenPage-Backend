@@ -7,8 +7,8 @@ from rest_framework import serializers
 
 from core.books.models import BookStatus
 from core.books.permissions import is_moderator_or_staff
-from core.books.serializers import BookDetailSerializer, is_liked_by_current_reader
-from core.profiles.models import AuthorProfile, Bookmark, ReadingHistory, Review
+from core.books.serializers import BookDetailSerializer, BookListSerializer, is_liked_by_current_reader
+from core.profiles.models import AuthorProfile, Bookmark, ReadingHistory, RecentBookView, Review
 
 
 User = get_user_model()
@@ -166,6 +166,22 @@ class ReadingHistorySerializer(serializers.ModelSerializer):
             return instance
 
         return super().update(instance, validated_data)
+
+
+class RecentBookViewSerializer(serializers.ModelSerializer):
+    book = BookListSerializer(read_only=True)
+
+    class Meta:
+        model = RecentBookView
+        fields = [
+            'id',
+            'book',
+            'viewed_count',
+            'last_viewed_at',
+            'created_at',
+        ]
+        read_only_fields = fields
+        ref_name = 'RecentBookView'
 
 
 class ReviewSerializer(serializers.ModelSerializer):

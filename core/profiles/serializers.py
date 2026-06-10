@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from core.books.models import Genre
-from core.profiles.models import AuthorProfile, ReaderProfile
+from core.profiles.models import AuthorProfile, AuthorSubscription, ReaderProfile
 
 
 User = get_user_model()
@@ -98,6 +98,26 @@ class AuthorProfileSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         ref_name = 'AuthorProfile'
+
+
+class AuthorSubscriptionSerializer(serializers.ModelSerializer):
+    author = AuthorProfileSerializer(read_only=True)
+    author_id = serializers.IntegerField(source='author.id', read_only=True)
+    author_name = serializers.CharField(source='author.full_name', read_only=True)
+
+    class Meta:
+        model = AuthorSubscription
+        fields = [
+            'id',
+            'reader',
+            'author',
+            'author_id',
+            'author_name',
+            'notify_new_books',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'reader', 'author', 'author_id', 'author_name', 'created_at']
+        ref_name = 'AuthorSubscription'
 
 
 class UserSerializer(serializers.ModelSerializer):

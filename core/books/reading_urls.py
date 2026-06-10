@@ -12,6 +12,8 @@ from core.books.reading_views import (
     ReadingHistoryCreateView,
     ReadingHistoryListView,
     ReadingHistoryUpdateView,
+    RecentBookViewClearView,
+    RecentBookViewListView,
     ReviewCreateView,
     ReviewDeleteView,
     ReviewDetailView,
@@ -36,6 +38,8 @@ urlpatterns = [
     path('reading-history/', ReadingHistoryListView.as_view(), name='reading-history-list'),
     path('reading-history/create/', ReadingHistoryCreateView.as_view(), name='reading-history-create'),
     path('reading-history/<uuid:pk>/update/', ReadingHistoryUpdateView.as_view(), name='reading-history-update'),
+    path('recent-books/', RecentBookViewListView.as_view(), name='recent-book-list'),
+    path('recent-books/clear/', RecentBookViewClearView.as_view(), name='recent-book-clear'),
 
     path('reviews/', ReviewListView.as_view(), name='review-list'),
     path('reviews/create/', ReviewCreateView.as_view(), name='review-create'),

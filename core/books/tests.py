@@ -10,7 +10,8 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from core.books.models import Book, BookComment, BookLike, BookStatus, Genre
-from core.profiles.models import AuthorProfile
+from core.notifications.models import Notification, NotificationEventType
+from core.profiles.models import AuthorProfile, AuthorSubscription, RecentBookView
 
 
 User = get_user_model()
@@ -199,6 +200,22 @@ class BookAPITests(APITestCase):
         self.book.refresh_from_db()
         self.assertEqual(self.book.views_count, 1)
 
+    def test_book_detail_records_recently_viewed_book(self):
+        self.client.force_authenticate(user=self.reader_user)
+
+        first_response = self.client.get(reverse('books:book-detail', kwargs={'pk': self.book.pk}))
+        second_response = self.client.get(reverse('books:book-by-slug', kwargs={'slug': self.book.slug}))
+
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+        recent_view = RecentBookView.objects.get(reader=self.reader_user.reader_profile, book=self.book)
+        self.assertEqual(recent_view.viewed_count, 2)
+
+        list_response = self.client.get(reverse('reading:recent-book-list'))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.data), 1)
+        self.assertEqual(list_response.data[0]['book']['id'], str(self.book.pk))
+
     def test_non_author_cannot_view_draft_book(self):
         self.client.force_authenticate(user=self.reader_user)
         response = self.client.get(reverse('books:book-detail', kwargs={'pk': self.draft_book.pk}))
@@ -254,6 +271,55 @@ class BookAPITests(APITestCase):
         created_book = Book.objects.get(title='New Book')
         self.assertTrue(created_book.authors.filter(pk=self.author_profile.pk).exists())
 
+    def test_publishing_book_notifies_author_subscribers(self):
+        AuthorSubscription.objects.create(
+            reader=self.reader_user.reader_profile,
+            author=self.author_profile,
+        )
+        self.draft_book.file = SimpleUploadedFile('draft-book.pdf', b'%PDF-1.4 test', content_type='application/pdf')
+        self.draft_book.save(update_fields=['file'])
+        self.client.force_authenticate(user=self.author_user)
+
+        response = self.client.patch(
+            reverse('books:book-update', kwargs={'pk': self.draft_book.pk}),
+            {'status': BookStatus.PUBLISHED},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        notification = Notification.objects.get(
+            recipient=self.reader_user,
+            notification_type=NotificationEventType.AUTHOR_NEW_BOOK,
+        )
+        self.assertEqual(notification.payload['book_id'], str(self.draft_book.pk))
+
+    def test_author_subscription_routes(self):
+        self.client.force_authenticate(user=self.reader_user)
+
+        subscribe_response = self.client.post(
+            reverse('profiles:author-subscription', kwargs={'pk': self.author_profile.pk}),
+            {'notify_new_books': True},
+            format='json',
+        )
+        self.assertEqual(subscribe_response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(
+            AuthorSubscription.objects.filter(
+                reader=self.reader_user.reader_profile,
+                author=self.author_profile,
+            ).exists()
+        )
+
+        list_response = self.client.get(reverse('profiles:author-subscription-list'))
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_response.data), 1)
+
+        unsubscribe_response = self.client.delete(
+            reverse('profiles:author-subscription', kwargs={'pk': self.author_profile.pk})
+        )
+        self.assertEqual(unsubscribe_response.status_code, status.HTTP_200_OK)
+        self.assertFalse(unsubscribe_response.data['subscribed'])
+        self.assertFalse(AuthorSubscription.objects.filter(reader=self.reader_user.reader_profile).exists())
+
     def test_book_update_is_limited_to_book_author(self):
         self.client.force_authenticate(user=self.reader_user)
         response = self.client.patch(
@@ -307,7 +373,14 @@ class BookAPITests(APITestCase):
         )
         self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
         comment_id = create_response.data['id']
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.author_user,
+                notification_type=NotificationEventType.BOOK_NEW_COMMENT,
+            ).exists()
+        )
 
+        self.client.force_authenticate(user=self.author_user)
         reply_response = self.client.post(
             reverse('books:book-comment-list', kwargs={'pk': self.book.pk}),
             {'text': 'Reply comment', 'parent': comment_id},
@@ -315,6 +388,12 @@ class BookAPITests(APITestCase):
         )
         self.assertEqual(reply_response.status_code, status.HTTP_201_CREATED)
         reply_id = reply_response.data['id']
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.reader_user,
+                notification_type=NotificationEventType.COMMENT_REPLY,
+            ).exists()
+        )
 
         list_response = self.client.get(reverse('books:book-comment-list', kwargs={'pk': self.book.pk}))
         self.assertEqual(list_response.status_code, status.HTTP_200_OK)

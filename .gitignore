@@ -12,3 +12,5 @@ staticfiles/
 media/
 static/
 .TODO
+celerybeat-schedule*
+TODO

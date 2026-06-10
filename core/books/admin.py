@@ -3,6 +3,7 @@ from django.db.models import Count
 from django.utils import timezone
 
 from core.books.models import Book, BookComment, BookLike, BookStatus, Genre, ReviewLike
+from core.notifications.services import notify_author_new_book
 
 
 @admin.register(Genre)
@@ -150,10 +151,16 @@ class BookAdmin(admin.ModelAdmin):
 
     @admin.action(description='Опубликовать выбранные книги')
     def publish_books(self, request, queryset):
-        updated = queryset.exclude(status=BookStatus.PUBLISHED).update(
+        books_to_notify = list(queryset.exclude(status=BookStatus.PUBLISHED).prefetch_related('authors'))
+        published_at = timezone.now()
+        updated = queryset.filter(pk__in=[book.pk for book in books_to_notify]).update(
             status=BookStatus.PUBLISHED,
-            published_at=timezone.now(),
+            published_at=published_at,
         )
+        for book in books_to_notify:
+            book.status = BookStatus.PUBLISHED
+            book.published_at = published_at
+            notify_author_new_book(book)
         self.message_user(request, f'Опубликовано книг: {updated}')
 
     @admin.action(description='Архивировать выбранные книги')
@@ -172,9 +179,26 @@ class BookAdmin(admin.ModelAdmin):
         self.message_user(request, f'Деактивировано книг: {updated}')
 
     def save_model(self, request, obj, form, change):
+        obj._was_available_for_notification = False
+        if change and obj.pk:
+            obj._was_available_for_notification = Book.objects.filter(
+                pk=obj.pk,
+                status=BookStatus.PUBLISHED,
+                is_active=True,
+            ).exists()
         if obj.status == BookStatus.PUBLISHED and obj.published_at is None:
             obj.published_at = timezone.now()
         super().save_model(request, obj, form, change)
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        book = form.instance
+        if (
+            book.status == BookStatus.PUBLISHED
+            and book.is_active
+            and not getattr(book, '_was_available_for_notification', False)
+        ):
+            notify_author_new_book(book)
 
 
 @admin.register(BookLike)

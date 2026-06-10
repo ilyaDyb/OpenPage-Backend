@@ -72,6 +72,82 @@ class ReaderProfile(models.Model):
         return f"Читатель: {self.user.username}"
 
 
+class AuthorSubscription(models.Model):
+    """Reader subscription to an author."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    reader = models.ForeignKey(
+        ReaderProfile,
+        on_delete=models.CASCADE,
+        related_name='author_subscriptions',
+        verbose_name='Reader',
+    )
+    author = models.ForeignKey(
+        AuthorProfile,
+        on_delete=models.CASCADE,
+        related_name='subscribers',
+        verbose_name='Author',
+    )
+    notify_new_books = models.BooleanField(default=True, verbose_name='Notify about new books')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Subscribed at')
+
+    class Meta:
+        verbose_name = 'Author subscription'
+        verbose_name_plural = 'Author subscriptions'
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['reader', 'author'],
+                name='profiles_author_subscription_unique_reader_author',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['author', 'notify_new_books']),
+            models.Index(fields=['reader', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.reader.user.username} -> {self.author.full_name}"
+
+
+class RecentBookView(models.Model):
+    """Recently viewed book for a reader."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    reader = models.ForeignKey(
+        ReaderProfile,
+        on_delete=models.CASCADE,
+        related_name='recent_book_views',
+        verbose_name='Reader',
+    )
+    book = models.ForeignKey(
+        'books.Book',
+        on_delete=models.CASCADE,
+        related_name='recent_views',
+        verbose_name='Book',
+    )
+    viewed_count = models.PositiveIntegerField(default=1, verbose_name='Viewed count')
+    last_viewed_at = models.DateTimeField(auto_now=True, verbose_name='Last viewed at')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='First viewed at')
+
+    class Meta:
+        verbose_name = 'Recently viewed book'
+        verbose_name_plural = 'Recently viewed books'
+        ordering = ['-last_viewed_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['reader', 'book'],
+                name='profiles_recent_book_view_unique_reader_book',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['reader', '-last_viewed_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.reader.user.username} -> {self.book.title}"
+
+
 class Bookmark(models.Model):
     """Закладка в книге"""
 

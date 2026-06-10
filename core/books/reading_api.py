@@ -22,6 +22,7 @@ from core.books.reading_serializers import (
 from core.books.serializers import BookDetailSerializer
 from core.books.models import Book
 from core.profiles.models import Bookmark, ReadingHistory
+from core.profiles.services import record_recent_book_view
 
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ class BookReadView(RetrieveAPIView):
             )
 
         book.update_views()
+        record_recent_book_view(request.user, book)
         try:
             history, _ = ReadingHistory.objects.get_or_create(
                 reader=request.user.reader_profile,
