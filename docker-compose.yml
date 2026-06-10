@@ -80,7 +80,6 @@ services:
     command: python -m core.open_page.devserver
     restart: always
 
-<<<<<<< HEAD
   nginx:
     image: nginx:1.27-alpine
     container_name: openpage_nginx
@@ -99,7 +98,6 @@ services:
       - certbot_certs:/etc/letsencrypt:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
-=======
   celery:
     build: .
     container_name: openpage_celery
@@ -107,7 +105,6 @@ services:
       - .:/app
       - static_volume:/app/staticfiles
       - media_volume:/app/media
->>>>>>> 5a40e66 ([x] Добавить историю недавно просмотренных книг)
     depends_on:
       redis:
         condition: service_started
@@ -130,23 +127,6 @@ services:
       <<: *web-env
     command: celery -A core.open_page beat -l INFO
     restart: always
-
-  nginx:
-    image: nginx:1.27-alpine
-    container_name: openpage_nginx
-    ports:
-      - "80:80"
-    environment:
-      FRONTEND_UPSTREAM: ${FRONTEND_UPSTREAM:-host.docker.internal:7070}
-    volumes:
-      - ./nginx/templates:/etc/nginx/templates:ro
-      - static_volume:/var/www/openpage/static:ro
-      - media_volume:/var/www/openpage/media:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      - web
-    restart: unless-stopped
 
   certbot:
     image: certbot/certbot:v2.11.0
